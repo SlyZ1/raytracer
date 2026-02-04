@@ -10,7 +10,7 @@
 
 using namespace std;
 
-#define SAMPLES 20
+#define SAMPLES 10
 
 string getShaderSource(const char *filepath){
     ifstream file(filepath);
@@ -129,6 +129,9 @@ int main(){
 
         glBindTexture(GL_TEXTURE_2D, texture);
         glDrawElements(GL_TRIANGLES, 6, GL_UNSIGNED_INT, 0);
+
+        if (app.keyPressed(GLFW_KEY_K))
+            cout << "Frame Time: " << glfwGetTime() << "s with " << frameCount << " samples." << endl;
 
         app.eventAndSwapBuffers();
         samples = SAMPLES;
