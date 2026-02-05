@@ -8,7 +8,7 @@ using namespace std;
 
 class ShaderProgram {
     private:
-        unsigned int shaderProgram;
+        unsigned int shaderProgram = 0;
         vector<unsigned int> shaders = {};
 
         string getShaderSource(const char *path);
@@ -16,6 +16,7 @@ class ShaderProgram {
     public:
         ShaderProgram();
         unsigned int id();
+        void create();
         void load(int type, const char *path);
         void link();
         void use();

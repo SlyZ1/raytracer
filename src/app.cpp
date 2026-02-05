@@ -5,12 +5,7 @@
 
 using namespace std;
 
-void framebuffer_size_callback(GLFWwindow*, int width, int height)
-{
-    glViewport(0, 0, width, height);
-}
-
-void App::init(int width, int height, const char *name){
+void App::init(int width, int height, const char *name, GLFWframebuffersizefun framebuffer_size_callback){
     if (!glfwInit())
     {
         cerr << "Failed to initialize GLFW" << endl;
@@ -46,7 +41,7 @@ void App::setClearColor(float r, float g, float b, float a){
 }
 
 void App::startFrame(){
-    if(glfwGetKey(window, GLFW_KEY_ESCAPE) == GLFW_PRESS)
+    if(keyPressed(GLFW_KEY_Q))
         glfwSetWindowShouldClose(window, true);
 
     glClear(GL_COLOR_BUFFER_BIT);
@@ -58,7 +53,12 @@ void App::eventAndSwapBuffers(){
 }
 
 void App::toggleCursor(bool show){
+    cursorHidden = !show;
     glfwSetInputMode(window, GLFW_CURSOR, !show ? GLFW_CURSOR_DISABLED : GLFW_CURSOR_NORMAL);
+}
+
+bool App::cursorIsHidden(){
+    return cursorHidden;
 }
 
 bool App::shouldClose(){
@@ -67,6 +67,23 @@ bool App::shouldClose(){
 
 bool App::keyPressed(int key){
     return glfwGetKey(window, key) == GLFW_PRESS;
+}
+
+bool App::keyPressedOnce(int key){
+    static bool wasPressed[GLFW_KEY_LAST + 1] = {false};
+
+    bool isPressed = glfwGetKey(window, key) == GLFW_PRESS;
+
+    if (isPressed && !wasPressed[key]) {
+        wasPressed[key] = true;
+        return true;   // appui détecté 🎯
+    }
+
+    if (!isPressed) {
+        wasPressed[key] = false;
+    }
+
+    return false;
 }
 
 float App::mouseX(){

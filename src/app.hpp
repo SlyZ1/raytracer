@@ -7,15 +7,18 @@ using namespace std;
 class App {
     private:
         GLFWwindow *window;
+        bool cursorHidden = false;
 
     public:
-        void init(int width, int height, const char *name);
+        void init(int width, int height, const char *name, GLFWframebuffersizefun framebuffer_size_callback);
         void setClearColor(float r, float g, float b, float a);
         void startFrame();
         void eventAndSwapBuffers();
         void toggleCursor(bool hide);
+        bool cursorIsHidden();
         bool shouldClose();
         bool keyPressed(int key);
+        bool keyPressedOnce(int key);
         float mouseX();
         float mouseY();
         void terminate();

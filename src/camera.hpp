@@ -21,4 +21,5 @@ class Camera {
         vec3 lookDir();
         vec3 position() {return pos;};
         bool getIsMoving();
+        void hasStoppedMoving() {isMoving = false; isLooking = false;};
 };

@@ -283,12 +283,11 @@ void diffuse(World world, inout Hit hit, inout Ray ray, inout uint seed){
             float weight = 1.0 / (wdirect * pdirect + wbsdf * pbsdf);
 
             ray.radiance += ray.throughput * Le * weight;
-            hit.t = -2;
         }
         else{
             ray.throughput /= pdirect * wdirect;
-            hit.t = -2;
         }
+        hit.t = -2;
     }
 }
 
@@ -301,9 +300,8 @@ void metal(Hit hit, in out Ray ray, in out uint seed){
 }
 
 void emit(inout Hit hit, inout Ray ray){
-    // should not happen but just in case
-    ray.throughput = hit.mat.color;
-    hit.t = -2;
+    ray.radiance = hit.mat.color * hit.mat.intensity;
+    hit.t = -1;
 }
 
 void computeLighting(World world, in out Hit hit, in out Ray ray, in out uint seed){
@@ -371,7 +369,7 @@ void main()
     ray = fovRay(pos, ray);
 
     Mat sphereMat = Mat(MAT_DIFF, vec3(1, 0, 0), 1, 0);
-    Mat sphereMat2 = Mat(MAT_METAL, vec3(1.), 1, 0);
+    Mat sphereMat2 = Mat(MAT_METAL, vec3(1.), 1, 0.5);
     Mat planeMat = Mat(MAT_DIFF, vec3(0.7), 1, 0);
 
     Sphere spheres[NUM_SPHERE];

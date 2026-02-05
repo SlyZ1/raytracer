@@ -1,6 +1,8 @@
 #include "shader_program.hpp"
 
-ShaderProgram::ShaderProgram(){
+ShaderProgram::ShaderProgram() : shaderProgram(0) { }
+
+void ShaderProgram::create(){
     shaderProgram = glCreateProgram();
 }
 
