@@ -32,16 +32,17 @@ struct Plane {
 };
 
 struct Ray {
-    vec3 oldNormal;
     vec3 origin;
     vec3 dir;
-    vec4 color;
+    vec3 throughput;
+    vec3 radiance;
 };
 
 struct Hit {
     float t;
     vec3 normal;
     Mat mat;
+    bool frontface;
 };
 
 #define NUM_SPHERE 3
@@ -63,8 +64,8 @@ uniform int samples;
 uniform Camera camera;
 in vec4 vClipPos;
 
-#define NOHIT Hit(-1, vec3(0,0,0), Mat(0,vec3(0),0,0))
-#define MAX_BOUNCES 1
+#define NOHIT Hit(-1, vec3(0,0,0), Mat(0,vec3(0),0,0), true)
+#define MAX_BOUNCES 7
 //#define SAMPLES 1
 #define EPS 1e-4
 #define PI 3.14159265
@@ -144,11 +145,18 @@ Hit sphereIntersect(Sphere sphere, Ray ray){
     float b = dot(oc, ray.dir);
     float c = dot(oc, oc) - sphere.rad * sphere.rad;
     float h = b*b - c;
+    bool frontface = true;
     if (h < 0.) return NOHIT;
     float t = -b - sqrt(h);
-    if (t <= 0) return NOHIT;
+    if (t <= 0){
+        /*t = -b + sqrt(h);
+        frontface = false;*/
+        if (t <= 0) return NOHIT;
+    }
     vec3 pos = ray.origin + t * ray.dir;
-    return Hit(t, normalize(pos - sphere.pos), sphere.mat);
+    vec3 normal = normalize(pos - sphere.pos);
+    if (!frontface) normal *= -1;
+    return Hit(t, normal, sphere.mat, frontface);
 }
 
 Hit lightIntersect(Light light, Ray ray){
@@ -160,7 +168,7 @@ Hit lightIntersect(Light light, Ray ray){
     float t = -b - sqrt(h);
     if (t <= 0) return NOHIT;
     vec3 pos = ray.origin + t * ray.dir;
-    return Hit(t, normalize(pos - light.pos), Mat(MAT_EMIT, light.color, light.intensity, 0));
+    return Hit(t, normalize(pos - light.pos), Mat(MAT_EMIT, light.color, light.intensity, 0), true);
 }
 
 Hit planeIntersect(Plane plane, Ray ray){
@@ -175,7 +183,7 @@ Hit planeIntersect(Plane plane, Ray ray){
     if (int((abs(relativePoint.x + 1) * 0.5) + int(abs(relativePoint.z + 1) * 0.5 + 1)) % 2 == 0) 
         plane.mat = Mat(plane.mat.type, vec3(0.83, 0.89, 0.95), 1, 0.);
 
-    return Hit(t, plane.normal, plane.mat);
+    return Hit(t, plane.normal, plane.mat, true);
 }
 
 Hit rayIntersection(World world, Ray ray){
@@ -185,7 +193,7 @@ Hit rayIntersection(World world, Ray ray){
         Hit sphereHit = sphereIntersect(world.spheres[i], ray);
         if (sphereHit.t > 0 && sphereHit.t < hit.t) hit = sphereHit;
     }
-    for(int i = 0; i < NUM_SPHERE; i += 1){
+    for(int i = 0; i < NUM_PLANE; i += 1){
         Hit planeHit = planeIntersect(world.planes[i], ray);
         if (planeHit.t > 0 && planeHit.t < hit.t) hit = planeHit;
     }
@@ -201,75 +209,87 @@ Hit rayIntersection(World world, Ray ray){
 
 // LIGHTS
 
+vec3 sky(vec3 lookingAt){
+    float a = (dot(normalize(lookingAt), vec3(0,1,0)) + 1) * 0.5;
+    vec3 top = vec3(0.17, 0.24, 0.31) * 1.1;
+    vec3 bot = vec3(1.0, 0.49, 0.37);
+    return mix(bot, top, a);
+}
+
 vec3 f_r(Hit hit){
     return hit.mat.color / PI;
 }
 
-float p_direct(Light light, float distance, float cosLight, World world, Ray ray){
-    Hit hit = rayIntersection(world, ray);
-    if (hit.t < 0 || hit.t - distance > 0.01) return 0;
+float p_direct(Light light, float distance, float cosLight){
     return distance * distance / (cosLight * 2 * PI * light.rad * light.rad);
+}
+
+float shadow_hit(Light light, World world, Ray ray){
+    Hit hit = rayIntersection(world, ray);
+    vec3 hitPos = ray.origin + ray.dir * hit.t;
+    if (hit.t > 0 && length(hitPos - light.pos) > light.rad + sqrt(EPS)) return 0;
+    return 1;
 }
 
 float p_bsdf(vec3 normal, vec3 w){
     return max(EPS, dot(normal, w)) / PI;
 }
 
-float power_heuristic(float p1, float p2, float beta){
-    return pow(p1, beta) / (pow(p1, beta) + pow(p2, beta));
-}
-
 void diffuse(World world, inout Hit hit, inout Ray ray, inout uint seed){
     Light light = world.lights[int(rand(seed) * (NUM_LIGHT - 1))];
     ray.origin = ray.origin + hit.t * ray.dir + EPS * hit.normal;
+    float wdirect = 0.5;
+    float wbsdf = 0.5;
     float r = rand(seed);
-    float wdirect = 1;
-    float wbsdf = 0.0;
-    if (r < wdirect){
+
+    if (r < wbsdf){
+        // BSDF sampling
+        vec3 newDir = randomCosineHemisphere(seed, hit.normal, 1);
+        ray.dir = newDir;
+        ray.throughput *= f_r(hit) * PI / wbsdf;
+
+        // Check if we hit a light with the BSDF sampling
+        Hit nextHit = rayIntersection(world, ray);
+        if (nextHit.t > 0 && nextHit.mat.type == MAT_EMIT){
+            vec3 Le = nextHit.mat.color * nextHit.mat.intensity;
+            float cosL = max(dot(-newDir, nextHit.normal), 0);
+
+            float pdirect = p_direct(light, nextHit.t, cosL)
+                            * shadow_hit(light, world, ray);
+            float pbsdf = p_bsdf(hit.normal, newDir);
+            float weight = wbsdf * pbsdf / (wbsdf * pbsdf + wdirect * pdirect);
+
+            ray.radiance += ray.throughput * Le * weight;
+            hit.t = -2;
+            return;
+        }
+    } else {
+        // Direct lighting
         vec3 nLight = randomOnUnitHemiphere(seed, ray.origin - light.pos);
         vec3 lightPoint = light.pos + nLight * light.rad;
         vec3 newDir = normalize(lightPoint - ray.origin);
         ray.dir = newDir;
 
         float cosR = max(dot(hit.normal, newDir), 0.0);
-        float cosL = abs(dot(-newDir, nLight));
+        float cosL = max(dot(-newDir, nLight), 0);
         vec3 Le = light.color * light.intensity;
         
-        float pdirect = p_direct(light, length(lightPoint - ray.origin), cosL, world, ray);
-        if (pdirect > 0){
-            float pbsdf = p_bsdf(hit.normal, newDir);
-            float weight = power_heuristic(wdirect * pdirect, wbsdf * pbsdf, 2);
+        float distance = length(lightPoint - ray.origin);
+        float pdirect = p_direct(light, distance, cosL);
+        ray.throughput *= f_r(hit) * cosR;
 
-            vec3 contrib = Le * f_r(hit) * cosR / (pdirect * wdirect);
-            ray.color += vec4(contrib * weight, 1);
+        if (shadow_hit(light, world, ray) > 0){
+            float pbsdf = p_bsdf(hit.normal, newDir);
+            float weight = 1.0 / (wdirect * pdirect + wbsdf * pbsdf);
+
+            ray.radiance += ray.throughput * Le * weight;
             hit.t = -2;
-            return;
+        }
+        else{
+            ray.throughput /= pdirect * wdirect;
+            hit.t = -2;
         }
     }
-    else{
-        vec3 newDir = randomCosineHemisphere(seed, hit.normal, 1);
-        ray.dir = newDir;
-        Hit nextHit = rayIntersection(world, ray);
-        if (nextHit.t > 0 && nextHit.mat.type == MAT_EMIT){
-            vec3 Le = nextHit.mat.color * nextHit.mat.intensity;
-            float cosR = max(dot(hit.normal, newDir), 0.0);
-            float cosL = abs(dot(-newDir, nextHit.normal));
-
-            float pdirect = p_direct(light, nextHit.t, cosL, world, ray);
-            float pbsdf = p_bsdf(hit.normal, newDir);
-            float weight = power_heuristic(wbsdf * pbsdf, wdirect * pdirect, 2);
-
-            vec3 contrib = Le * f_r(hit) * cosR / (pbsdf * wbsdf);
-            ray.color += vec4(contrib * weight, 1);
-            hit.t = -2;
-            return;
-        }
-    }
-
-    vec3 newDir = randomCosineHemisphere(seed, hit.normal, 1);
-    ray.dir = newDir;
-    ray.color *= vec4(f_r(hit), 1);
-    ray.color = vec4(1,1,0,1);
 }
 
 void metal(Hit hit, in out Ray ray, in out uint seed){
@@ -277,11 +297,12 @@ void metal(Hit hit, in out Ray ray, in out uint seed){
     newDir = randomCosineHemisphere(seed, newDir, hit.mat.fuzz); 
     ray.origin = ray.origin + hit.t * ray.dir + hit.normal * EPS;
     ray.dir = newDir;
-    ray.color *= vec4(hit.mat.color, 1);
+    ray.throughput *= hit.mat.color;
 }
 
 void emit(inout Hit hit, inout Ray ray){
-    ray.color += vec4(hit.mat.color * hit.mat.intensity,1);
+    // should not happen but just in case
+    ray.throughput = hit.mat.color;
     hit.t = -2;
 }
 
@@ -317,12 +338,7 @@ Ray fovRay(vec2 pos, Ray ray){
     return ray;
 }
 
-vec4 sky(vec3 lookingAt){
-    float a = (dot(normalize(lookingAt), vec3(0,1,0)) + 1) * 0.5;
-    vec3 top = vec3(0.17, 0.24, 0.31) * 1.1;
-    vec3 bot = vec3(1.0, 0.49, 0.37);
-    return mix(vec4(bot, 1), vec4(top, 1), a);
-}
+
 
 vec4 rayColor(World world, in out uint seed, Ray ray){
     Ray tracedRay = ray;
@@ -332,8 +348,8 @@ vec4 rayColor(World world, in out uint seed, Ray ray){
         computeLighting(world, hit, tracedRay, seed);
 
         if (hit.t < 0){
-            //tracedRay.color *= sky(tracedRay.dir);
-            return tracedRay.color;
+            tracedRay.radiance += tracedRay.throughput * sky(tracedRay.dir);
+            return vec4(tracedRay.radiance, 1);
         }// Cas ou on tombe sur une light ou sur rien
     }
 
@@ -347,10 +363,10 @@ void main()
     vec2 uv = (vClipPos.xy + vec2(1)) * 0.5;
 
     Ray ray = Ray(
-        vec3(0),
         camera.pos, 
         camera.lookDir, 
-        vec4(0.0)
+        vec3(1),
+        vec3(0)
     );
     ray = fovRay(pos, ray);
 
@@ -361,7 +377,7 @@ void main()
     Sphere spheres[NUM_SPHERE];
     spheres[0] = Sphere(vec3(0,EPS,-5), 2, sphereMat);
     spheres[1] = Sphere(vec3(0,EPS,-10), 2, planeMat);
-    spheres[2] = Sphere(vec3(6, 2+EPS, -5), 4, sphereMat2);
+    spheres[2] = Sphere(vec3(6, 2-EPS, -5), 4, sphereMat2);
     
     Plane planes[NUM_PLANE];
     planes[0] = Plane(vec3(0,-2,-3), vec3(0,1,0), planeMat);
@@ -369,12 +385,12 @@ void main()
     lights[0] = Light(vec3(0,EPS,2), 1, vec3(1), 10);
     World world = World(spheres, planes, lights);
 
-    vec4 currentColor;
+    vec4 radiance;
     for(int i = 0; i < samples; i++){
         ray.origin = ray.origin + 1.5*randomInSphere(seed) / winSize.y; // slight Anti-aliasing
-        currentColor += rayColor(world, seed, ray);
+        radiance += rayColor(world, seed, ray);
     }
 
-    FragColor = currentColor + float(frameCount - samples) * texture(screenTex, uv);
+    FragColor = radiance + float(frameCount - samples) * texture(screenTex, uv);
     FragColor /= frameCount;
 }
