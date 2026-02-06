@@ -11,6 +11,7 @@
 using namespace std;
 
 #define SAMPLES 10
+#define BSDF_TYPES 3
 
 ShaderProgram rayTraceShader;
 ShaderProgram accumulationShader;
@@ -18,8 +19,11 @@ unsigned int VBO, VAO, EBO;
 unsigned int FBO;
 unsigned int texture;
 unsigned int oldTexture;
-int frameCount = SAMPLES;
+int frameCount = 0;
+int frameAccumulator = SAMPLES;
 int samples = SAMPLES;
+int bsdfType = 0;
+int bsdfWeighting = 0;
 Camera camera(0.1, 0.3);
 App app;
 
@@ -54,7 +58,7 @@ void framebuffer_size_callback(GLFWwindow*, int width, int height)
     glBindTexture(GL_TEXTURE_2D, 0);
 
     samples = 1;
-    frameCount = 1;
+    frameAccumulator = 1;
 }
 
 void init(){
@@ -125,48 +129,72 @@ void render(){
     //Current frame
     glBindFramebuffer(GL_FRAMEBUFFER, FBO);
     glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, texture, 0);
-    app.startFrame();
     rayTraceShader.use();
     
     glUniform1f(1, static_cast<float>(glfwGetTime()));
     glUniform2f(2, app.width(), app.height());
-    glUniform1i(4, frameCount);
-
-    int fragSamplesLoc = glGetUniformLocation(rayTraceShader.id(), "samples");
-    glUniform1i(fragSamplesLoc, samples);
+    glActiveTexture(GL_TEXTURE0);
+    glBindTexture(GL_TEXTURE_2D, oldTexture);
+    glUniform1i(3, 0);
+    glUniform1i(4, frameAccumulator);
+    glUniform1i(5, bsdfType);
+    glUniform1i(6, bsdfWeighting);
+    glUniform1i(7, samples);
     int camPosLoc = glGetUniformLocation(rayTraceShader.id(), "camera.pos");
     glUniform3f(camPosLoc, camera.position().x, camera.position().y, camera.position().z);
     int camDirLoc = glGetUniformLocation(rayTraceShader.id(), "camera.lookDir");
     glUniform3f(camDirLoc, camera.lookDir().x, camera.lookDir().y, camera.lookDir().z);
     
-    glActiveTexture(GL_TEXTURE0);
-    glBindTexture(GL_TEXTURE_2D, oldTexture);
-    glUniform1i(3, 0);
-
+    
     glBindVertexArray(VAO);
     glDrawElements(GL_TRIANGLES, 6, GL_UNSIGNED_INT, 0);
     
     //Update oldTexture
     std::swap(texture, oldTexture);
-
+    
     //Screen display (accumulation)
     glBindFramebuffer(GL_FRAMEBUFFER, 0);
-    app.startFrame();
     accumulationShader.use();
-
+    
     glBindTexture(GL_TEXTURE_2D, texture);
     glDrawElements(GL_TRIANGLES, 6, GL_UNSIGNED_INT, 0);
 }
 
 void inputs(){
-    if (app.keyPressedOnce(GLFW_KEY_K))
-        cout << "Frame Time: " << glfwGetTime() << "s with " << frameCount << " samples." << endl;
-
-    if (app.keyPressedOnce(GLFW_KEY_ESCAPE))
+    if (app.keyPressedOnce(GLFW_KEY_K, frameCount))
+        cout << "Frame Time: " << glfwGetTime() << "s with " << frameAccumulator << " samples." << endl;
+    
+    if (app.keyPressedOnce(GLFW_KEY_ESCAPE, frameCount)){
+        cout << "Toggling cursor." << endl;
         app.toggleCursor(true);
-
-    if (app.keyPressedOnce(GLFW_KEY_ENTER))
+    }
+    
+    if (app.keyPressedOnce(GLFW_KEY_ENTER, frameCount))
         app.toggleCursor(false);
+
+    if (app.keyPressedOnce(GLFW_KEY_KP_ADD, frameCount)){
+        frameAccumulator = samples;
+        bsdfType = (bsdfType + 1) % BSDF_TYPES;
+        cout << "BSDF type : " << bsdfType << endl;
+    }
+    
+    if (app.keyPressedOnce(GLFW_KEY_KP_SUBTRACT, frameCount)){
+        frameAccumulator = samples;
+        bsdfType = (bsdfType - 1 + BSDF_TYPES) % BSDF_TYPES;
+        cout << "BSDF type : " << bsdfType << endl;
+    }
+    
+    if (app.keyPressedOnce(GLFW_KEY_UP, frameCount)){
+        frameAccumulator = samples;
+        bsdfWeighting = std::clamp(bsdfWeighting + 1, 0, 8);
+        cout << "BSDF weighting : " << bsdfWeighting << endl;
+    }
+    
+    if (app.keyPressedOnce(GLFW_KEY_DOWN, frameCount)){
+        frameAccumulator = samples;
+        bsdfWeighting = std::clamp(bsdfWeighting - 1, 0, 8);
+        cout << "BSDF weighting : " << bsdfWeighting << endl;
+    }
 }
 
 void end(){
@@ -181,17 +209,19 @@ int main(){
     init();
     while(!app.shouldClose())
     {
+        app.startFrame(frameAccumulator);
         handleCamera();
         if (camera.getIsMoving()){
             samples = 3;
-            frameCount = 3;
+            frameAccumulator = 3;
         }
         render();
         inputs();
-
+        
         app.eventAndSwapBuffers();
         samples = SAMPLES;
-        frameCount += samples;
+        frameAccumulator += samples;
+        frameCount++;
     }
     end();
     return EXIT_SUCCESS;

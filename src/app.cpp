@@ -40,10 +40,9 @@ void App::setClearColor(float r, float g, float b, float a){
     glClearColor(r, g, b, a);
 }
 
-void App::startFrame(){
-    if(keyPressed(GLFW_KEY_Q))
+void App::startFrame(int frame){
+    if(keyPressedOnce(GLFW_KEY_ESCAPE, frame) && !cursorHidden)
         glfwSetWindowShouldClose(window, true);
-
     glClear(GL_COLOR_BUFFER_BIT);
 }
 
@@ -69,18 +68,18 @@ bool App::keyPressed(int key){
     return glfwGetKey(window, key) == GLFW_PRESS;
 }
 
-bool App::keyPressedOnce(int key){
-    static bool wasPressed[GLFW_KEY_LAST + 1] = {false};
+bool App::keyPressedOnce(int key, int frame){
+    static int wasPressed[GLFW_KEY_LAST + 1] = {INT_MAX};
 
     bool isPressed = glfwGetKey(window, key) == GLFW_PRESS;
 
-    if (isPressed && !wasPressed[key]) {
-        wasPressed[key] = true;
-        return true;   // appui détecté 🎯
+    if (isPressed && wasPressed[key] >= frame) {
+        wasPressed[key] = frame;
+        return true;
     }
 
     if (!isPressed) {
-        wasPressed[key] = false;
+        wasPressed[key] = INT_MAX;
     }
 
     return false;
