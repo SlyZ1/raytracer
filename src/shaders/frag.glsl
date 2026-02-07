@@ -67,7 +67,7 @@ uniform Camera camera;
 in vec4 vClipPos;
 
 #define NOHIT Hit(-1, vec3(0,0,0), Mat(0,vec3(0),0,0), true)
-#define MAX_BOUNCES 7
+#define MAX_BOUNCES 4
 //#define SAMPLES 1
 #define EPS 1e-4
 #define PI 3.14159265
@@ -142,6 +142,35 @@ vec3 randomOnUnitHemiphere(inout uint seed, vec3 normal){
 vec3 randomCosineHemisphere(inout uint seed, vec3 normal, float randomizationFactor){
     vec3 val = normalize(normal) * (1 + EPS) + randomOnUnitSphere(seed) * randomizationFactor;
     return normalize(val);
+}
+
+void createTangentBasis(in vec3 N, out vec3 T, out vec3 B) {
+    vec3 up = abs(N.z) < 0.999 ? vec3(0.0, 0.0, 1.0) : vec3(1.0, 0.0, 0.0);
+
+    T = normalize(cross(up, N));
+    B = cross(N, T);
+}
+
+vec3 randomGGXHemisphere(inout uint seed, vec3 normal, float alpha){
+    float xi1 = rand(seed);
+    float xi2 = rand(seed);
+    float phi = 2.0 * PI * xi2;
+    float theta = atan(alpha * sqrt(xi1) / sqrt(1.0 - xi1));
+
+    vec3 T, B;
+    createTangentBasis(normal, T, B);
+    vec3 H_local = vec3(sin(theta) * cos(phi), sin(theta) * sin(phi), cos(theta));
+    vec3 H = normalize(H_local.x * T + H_local.y * B + H_local.z * normal);
+
+    return H;
+}
+
+vec3 reflect(vec3 I, vec3 N) {
+    return I - 2.0 * dot(I, N) * N;
+}
+
+void stop(inout Hit hit){
+    hit.t = -2;
 }
 
 
@@ -223,6 +252,8 @@ vec3 sky(vec3 lookingAt){
     return mix(bot, top, a);
 }
 
+// brdfs
+
 vec3 lambert(Hit hit){
     return hit.mat.color / PI;
 }
@@ -232,21 +263,48 @@ float wrap(float ndotl, float wrapFactor){
     return wrap;
 }
 
-vec3 oren_nayar(Hit hit, vec3 normal, vec3 lightDir, vec3 viewDir, float roughness){
-    float sigma2 = roughness * roughness;
-    float A = 1.0 - (sigma2 / (2.0 * (sigma2 + 0.33)));
-    float B = 0.45 * sigma2 / (sigma2 + 0.09);
+float cosPhiDiff(vec3 normal, vec3 lightDir, vec3 viewDir){
+    vec3 Lp = normalize(lightDir - normal * dot(lightDir, normal));
+    vec3 Vp = normalize(viewDir - normal * dot(viewDir, normal));
 
-    float LdotN = max(dot(normal, lightDir), 0.0);
-    float VdotN = max(dot(normal, viewDir), 0.0);
-    float alpha = max(acos(LdotN), acos(VdotN));
-    float beta = min(acos(LdotN), acos(VdotN));
-    float gamma = dot(viewDir, lightDir);
-
-    float angleTerm = A + B * max(0.0, gamma) * sin(alpha) * tan(beta);
-
-    return hit.mat.color * angleTerm * LdotN / PI;
+    return dot(Lp, Vp);
 }
+
+vec3 oren_nayar(Hit hit, vec3 normal, vec3 lightDir, vec3 viewDir, float roughness){
+    return hit.mat.color / PI;
+}
+
+vec3 schlickFresnel(float VdotH, vec3 F0)
+{
+    return F0 + (vec3(1) - F0) * pow(1 - VdotH, 5);
+}
+
+float DGTR(float a2, float NdotH){
+    float denom = NdotH * NdotH * (a2 - 1) + 1;
+    return a2 / max(PI * denom * denom, EPS);
+}
+
+float G1GTR(float a2, float NdotW){
+    float denom = NdotW + sqrt(a2 + (1.0 - a2) * NdotW * NdotW);
+    return 2.0 * NdotW / max(denom, EPS);
+}
+
+vec3 cookTorrance(Hit hit, vec3 viewDir, vec3 lightDir, float roughness){
+    vec3 h = normalize(lightDir + viewDir);
+    float NdotH = max(dot(hit.normal, h), 0);
+    float NdotL = max(dot(hit.normal, lightDir), 0);
+    float NdotV = max(dot(viewDir, hit.normal), 0);
+    float VdotH = max(dot(h, viewDir), 0);
+    float alpha = roughness * roughness;
+    float a2 = alpha * alpha;
+    float D = DGTR(a2, NdotH);
+    float G = G1GTR(a2, NdotV) * G1GTR(a2, NdotL);
+    vec3 F = schlickFresnel(VdotH, hit.mat.color);
+
+    return F * D * G / max(4 * NdotV * NdotL, EPS);
+}
+
+// pdfs
 
 float p_direct(Light light, float distance, float cosLight){
     return distance * distance / (cosLight * 2 * PI * light.rad * light.rad);
@@ -263,8 +321,24 @@ float p_bsdf(vec3 normal, vec3 w){
     return max(EPS, dot(normal, w)) / PI;
 }
 
-float p_metal(vec3 reflect, vec3 w, float fuzz){
-    return max(EPS, dot(reflect, w)) / (PI * pow(fuzz, 2));
+float p_GGX(vec3 normal, vec3 l, vec3 v, float alpha){
+    vec3 h = normalize(l + v);
+    float NdotH = max(dot(normal, h), 0.0);
+    float VdotH = max(dot(v, h), 0.0);
+    float D = DGTR(alpha * alpha, NdotH);
+    return D * NdotH / max(4.0 * VdotH, EPS);
+}
+
+// lighting functions
+
+void russianRoulette(inout Ray ray, inout Hit hit, inout uint seed){
+    float prob = max(ray.throughput.r, ray.throughput.g);
+    prob = max(ray.throughput.b, prob);
+    if (rand(seed) > prob) {
+        ray.throughput = vec3(0);
+        hit.t = -1;
+    }  
+    else { ray.throughput /= prob; }
 }
 
 void diffuse(World world, inout Hit hit, inout Ray ray, inout uint seed){
@@ -275,101 +349,116 @@ void diffuse(World world, inout Hit hit, inout Ray ray, inout uint seed){
     vec3 lightPoint = light.pos + nLight * light.rad;
     vec3 lightDir = normalize(lightPoint - ray.origin);
 
+    // MIS
     float wdirect = bsdfWeighting / 8.0;
     float wbsdf = 1 - bsdfWeighting / 8.0;
+    wdirect = 3/8.0;
+    wbsdf = 5/8.0;
     float r = rand(seed);
+    float orenNayarRoughness = sqrt(0.3);
 
     if (r < wbsdf){
         // BSDF sampling
         vec3 newDir = randomCosineHemisphere(seed, hit.normal, 1);
         vec3 f_r = vec3(0);
-        if (bsdfType == BSDF_OREN_NAYAR) f_r = oren_nayar(hit, hit.normal, lightDir, ray.dir, 1);
+        if (bsdfType == BSDF_OREN_NAYAR) 
+            f_r = oren_nayar(hit, hit.normal, newDir, ray.dir, orenNayarRoughness);
         if (bsdfType == BSDF_LAMBERT || bsdfType == BSDF_LAMBERT_WRAP) f_r = lambert(hit);
         ray.throughput *= f_r * PI / wbsdf;
         ray.dir = newDir;
 
         if (bsdfType == BSDF_LAMBERT_WRAP){
-            float wrap = wrap(dot(hit.normal, lightDir), 0.5);
-            float cos = max(dot(hit.normal, newDir), wrap);
-            ray.throughput *= cos / dot(newDir, hit.normal);
+            float wrap = wrap(dot(hit.normal, newDir), 0.5);
+            //float cos = max(dot(hit.normal, newDir), wrap);
+            ray.throughput *= wrap / dot(newDir, hit.normal);
         }
         // Check if we hit a light with the BSDF sampling
         Hit nextHit = rayIntersection(world, ray);
         if (nextHit.t > 0 && nextHit.mat.type == MAT_EMIT){
             vec3 Le = nextHit.mat.color * nextHit.mat.intensity;
-            float cosL = max(dot(-newDir, nextHit.normal), 1);
+            float LdotNl = max(dot(-newDir, nextHit.normal), 1);
 
-            float pdirect = p_direct(light, nextHit.t, cosL)
+            float pdirect = p_direct(light, nextHit.t, LdotNl)
                             * shadow_hit(light, world, ray);
             float pbsdf = p_bsdf(hit.normal, newDir);
             float weight = wbsdf * pbsdf / (wbsdf * pbsdf + wdirect * pdirect);
 
             ray.radiance += ray.throughput * Le * weight;
-            hit.t = -2;
+            stop(hit);
         }
     } 
     else {
         // Direct lighting
         vec3 newDir = lightDir;
-        float cosR = max(dot(hit.normal, newDir), 0.0);
-        float cosL = max(dot(-newDir, nLight), 0);
+        float NdotL = max(dot(hit.normal, newDir), 0.0);
+        float LdotNl = max(dot(-newDir, nLight), 0);
         vec3 f_r = vec3(0);
-        if (bsdfType == BSDF_OREN_NAYAR) f_r = oren_nayar(hit, hit.normal, lightDir, ray.dir, 1);
+        if (bsdfType == BSDF_OREN_NAYAR) f_r = oren_nayar(hit, hit.normal, newDir, ray.dir, orenNayarRoughness);
         if (bsdfType == BSDF_LAMBERT || bsdfType == BSDF_LAMBERT_WRAP) f_r = lambert(hit);
-        ray.throughput *= f_r * cosR;
+        ray.throughput *= f_r * NdotL;
         ray.dir = newDir;
 
         vec3 Le = light.color * light.intensity;
         
         float distance = length(lightPoint - ray.origin);
-        float pdirect = p_direct(light, distance, cosL);
+        float pdirect = p_direct(light, distance, LdotNl);
 
         if (shadow_hit(light, world, ray) > 0){
             float pbsdf = p_bsdf(hit.normal, newDir);
             float weight = 1.0 / (wdirect * pdirect + wbsdf * pbsdf);
 
             if (bsdfType == BSDF_LAMBERT_WRAP){
-                ray.throughput *= wrap(dot(hit.normal, lightDir), 0.5) / cosR;
+                ray.throughput *= wrap(dot(hit.normal, lightDir), 0.5) / NdotL;
             }
             ray.radiance += ray.throughput * Le * weight;
         }
         else{
             ray.throughput /= pdirect * wdirect;
         }
-        hit.t = -2;
+        stop(hit);
     }
+    //russianRoulette(ray, hit, seed);
 }
 
-void metal(World world, Hit hit, in out Ray ray, in out uint seed){
-    hit.t = -2;
-    return;
+void metal(World world, inout Hit hit, in out Ray ray, in out uint seed){
     Light light = world.lights[int(rand(seed) * (NUM_LIGHT - 1))];
     ray.origin = ray.origin + hit.t * ray.dir + hit.normal * EPS;
-    vec3 reflection = ray.dir - 2 * dot(ray.dir, hit.normal) * hit.normal;
-    float wdirect = 0.5 * hit.mat.fuzz;
-    float wmetal = 0.5 + 0.5 * (1 - hit.mat.fuzz);
-    wdirect = 0;
-    wmetal = 1;
-    float r = rand(seed);
-
-    if (r < wmetal){
-        vec3 newDir = randomCosineHemisphere(seed, reflection, hit.mat.fuzz);
+    
+    if (hit.mat.fuzz < EPS){
+        vec3 newDir = reflect(ray.dir, hit.normal);
+        float VdotN = max(dot(-ray.dir, hit.normal), 0.0);
+        vec3 f_r = schlickFresnel(VdotN, hit.mat.color);
+        ray.throughput *= f_r;
         ray.dir = newDir;
-        ray.throughput *= hit.mat.color / wmetal;
+        return;
+    }
+
+    // MIS
+    float t = clamp(hit.mat.fuzz / 0.2, 0, 1);
+    float wdirect = 3/8.0 * t;
+    float wGGX = 5/8.0 + 3/8.0 * (1 - t);
+    float r = rand(seed);
+    if (r < wGGX){
+        float alpha = hit.mat.fuzz * hit.mat.fuzz;
+        vec3 h = randomGGXHemisphere(seed, hit.normal, alpha);
+        vec3 newDir = reflect(ray.dir, h);
+        
+        float NdotL = max(dot(hit.normal, newDir), 0.0);
+        float pGGX = p_GGX(hit.normal, newDir, -ray.dir, alpha);
+        vec3 f_r = cookTorrance(hit, -ray.dir, newDir, hit.mat.fuzz);
+        ray.throughput *= f_r * NdotL / (pGGX * wGGX);
+        ray.dir = newDir;
 
         Hit nextHit = rayIntersection(world, ray);
         if (nextHit.t > 0 && nextHit.mat.type == MAT_EMIT){
             vec3 Le = nextHit.mat.color * nextHit.mat.intensity;
-            float cosL = max(dot(-newDir, nextHit.normal), 0);
-
-            float pdirect = p_direct(light, nextHit.t, cosL)
+            float LdotNl = max(dot(-newDir, nextHit.normal), 0);
+            float pdirect = p_direct(light, nextHit.t, LdotNl)
                             * shadow_hit(light, world, ray);
-            float pmetal = p_metal(reflection, newDir, hit.mat.fuzz);
-            float weight = wmetal * pmetal / (wmetal * pmetal + wdirect * pdirect);
+            float weight = wGGX * pGGX / (wGGX * pGGX + wdirect * pdirect);
 
             ray.radiance += ray.throughput * Le * weight;
-            hit.t = -2;
-            return;
+            stop(hit);
         }
     }
     else{
@@ -377,26 +466,25 @@ void metal(World world, Hit hit, in out Ray ray, in out uint seed){
         vec3 nLight = randomOnUnitHemiphere(seed, ray.origin - light.pos);
         vec3 lightPoint = light.pos + nLight * light.rad;
         vec3 newDir = normalize(lightPoint - ray.origin);
+        vec3 viewDir = -ray.dir;
         ray.dir = newDir;
 
-        float cosR = max(dot(hit.normal, newDir), 0.0);
-        float cosL = max(dot(-newDir, nLight), 0);
+        float NdotL = max(dot(hit.normal, newDir), 0.0);
+        float LdotNl = max(dot(-newDir, nLight), 0);
         vec3 Le = light.color * light.intensity;
         
         float distance = length(lightPoint - ray.origin);
-        float pdirect = p_direct(light, distance, cosL);
-        ray.throughput *= lambert(hit) * cosR;
+        float pdirect = p_direct(light, distance, LdotNl);
+        vec3 f_r = cookTorrance(hit, viewDir, newDir, hit.mat.fuzz);
+        ray.throughput *= f_r * NdotL / (pdirect * wdirect);
 
         if (shadow_hit(light, world, ray) > 0){
-            float pmetal = p_metal(reflection, newDir, hit.mat.fuzz);
-            float weight = 1.0 / (wdirect * pdirect + wmetal * pmetal);
+            float pGGX = p_GGX(hit.normal, newDir, viewDir, hit.mat.fuzz * hit.mat.fuzz);
+            float weight = (pdirect * wdirect) / (wdirect * pdirect + wGGX * pGGX);
 
             ray.radiance += ray.throughput * Le * weight;
         }
-        else{
-            ray.throughput /= pdirect * wdirect;
-        }
-        hit.t = -2;
+        stop(hit);
     }
 }
 
@@ -411,13 +499,13 @@ void computeLighting(World world, in out Hit hit, in out Ray ray, in out uint se
     switch (hit.mat.type){
         case MAT_DIFF:
             diffuse(world, hit, ray, seed);
-            break;
+            return;
         case MAT_METAL:
             metal(world, hit, ray, seed);
-            break;
+            return;
         case MAT_EMIT:
             emit(hit, ray);
-            break;
+            return;
     }
 }
 
@@ -447,7 +535,7 @@ vec4 rayColor(World world, in out uint seed, Ray ray){
         computeLighting(world, hit, tracedRay, seed);
 
         if (hit.t < 0){
-            //tracedRay.radiance += tracedRay.throughput * sky(tracedRay.dir);
+            tracedRay.radiance += tracedRay.throughput * sky(tracedRay.dir);
             return vec4(tracedRay.radiance, 1);
         }// Cas ou on tombe sur une light ou sur rien
     }
@@ -470,7 +558,7 @@ void main()
     ray = fovRay(pos, ray);
 
     Mat sphereMat = Mat(MAT_DIFF, vec3(1, 0, 0), 1, 0);
-    Mat sphereMat2 = Mat(MAT_METAL, vec3(1.), 1, 1);
+    Mat sphereMat2 = Mat(MAT_METAL, vec3(1.), 1, bsdfWeighting / 8.0);
     Mat planeMat = Mat(MAT_DIFF, vec3(0.7), 1, 0);
 
     Sphere spheres[NUM_SPHERE];
@@ -481,7 +569,7 @@ void main()
     Plane planes[NUM_PLANE];
     planes[0] = Plane(vec3(0,-2,-3), vec3(0,1,0), planeMat);
     Light lights[NUM_LIGHT];
-    lights[0] = Light(vec3(0,3,2), 1.5, vec3(1), 15);
+    lights[0] = Light(vec3(0,5,10), 2.3, vec3(1), 10);
     World world = World(spheres, planes, lights);
 
     vec4 radiance;

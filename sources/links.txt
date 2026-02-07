@@ -1,0 +1,3 @@
+Schlick's Fresnel approximation : https://blog.demofox.org/2017/01/09/raytracing-reflection-refraction-fresnel-total-internal-reflection-and-beers-law/
+Microfacet distribs : https://www.scitepress.org/Papers/2021/102527/pdf/index.html
+Sampling of GGX : https://www.cs.cornell.edu/~srm/publications/EGSR07-btdf.pdf
