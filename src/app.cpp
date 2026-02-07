@@ -17,14 +17,14 @@ void App::init(int width, int height, const char *name, GLFWframebuffersizefun f
     glfwWindowHint(GLFW_CONTEXT_VERSION_MINOR, 3);
     glfwWindowHint(GLFW_OPENGL_PROFILE, GLFW_OPENGL_CORE_PROFILE);
     
-    window = glfwCreateWindow(width, height, "ZMMR", NULL, NULL);
-    glfwSetWindowTitle(window, name);
-    if (window == NULL)
+    m_window = glfwCreateWindow(width, height, "ZMMR", NULL, NULL);
+    glfwSetWindowTitle(m_window, name);
+    if (m_window == NULL)
     {
         cerr << "Failed to open GLFW window" << endl;
         exit(1);
     }
-    glfwMakeContextCurrent(window);
+    glfwMakeContextCurrent(m_window);
 
     if (!gladLoadGLLoader((GLADloadproc)glfwGetProcAddress))
     {
@@ -33,7 +33,7 @@ void App::init(int width, int height, const char *name, GLFWframebuffersizefun f
     }
 
     glViewport(0, 0, width, height);
-    glfwSetFramebufferSizeCallback(window, framebuffer_size_callback);
+    glfwSetFramebufferSizeCallback(m_window, framebuffer_size_callback);
 }
 
 void App::setClearColor(float r, float g, float b, float a){
@@ -41,37 +41,37 @@ void App::setClearColor(float r, float g, float b, float a){
 }
 
 void App::startFrame(int frame){
-    if(keyPressedOnce(GLFW_KEY_ESCAPE, frame) && !cursorHidden)
-        glfwSetWindowShouldClose(window, true);
+    if(keyPressedOnce(GLFW_KEY_ESCAPE, frame) && !m_cursorHidden)
+        glfwSetWindowShouldClose(m_window, true);
     glClear(GL_COLOR_BUFFER_BIT);
 }
 
 void App::eventAndSwapBuffers(){
-    glfwSwapBuffers(window);
+    glfwSwapBuffers(m_window);
     glfwPollEvents();
 }
 
 void App::toggleCursor(bool show){
-    cursorHidden = !show;
-    glfwSetInputMode(window, GLFW_CURSOR, !show ? GLFW_CURSOR_DISABLED : GLFW_CURSOR_NORMAL);
+    m_cursorHidden = !show;
+    glfwSetInputMode(m_window, GLFW_CURSOR, !show ? GLFW_CURSOR_DISABLED : GLFW_CURSOR_NORMAL);
 }
 
 bool App::cursorIsHidden(){
-    return cursorHidden;
+    return m_cursorHidden;
 }
 
 bool App::shouldClose(){
-    return glfwWindowShouldClose(window);
+    return glfwWindowShouldClose(m_window);
 }
 
 bool App::keyPressed(int key){
-    return glfwGetKey(window, key) == GLFW_PRESS;
+    return glfwGetKey(m_window, key) == GLFW_PRESS;
 }
 
 bool App::keyPressedOnce(int key, int frame){
     static int wasPressed[GLFW_KEY_LAST + 1] = {INT_MAX};
 
-    bool isPressed = glfwGetKey(window, key) == GLFW_PRESS;
+    bool isPressed = glfwGetKey(m_window, key) == GLFW_PRESS;
 
     if (isPressed && wasPressed[key] >= frame) {
         wasPressed[key] = frame;
@@ -87,13 +87,13 @@ bool App::keyPressedOnce(int key, int frame){
 
 float App::mouseX(){
     double mouseX;
-    glfwGetCursorPos(window, &mouseX, nullptr);
+    glfwGetCursorPos(m_window, &mouseX, nullptr);
     return static_cast<float>(mouseX);
 }
 
 float App::mouseY(){
     double mouseY;
-    glfwGetCursorPos(window, nullptr, &mouseY);
+    glfwGetCursorPos(m_window, nullptr, &mouseY);
     return static_cast<float>(mouseY);
 }
 
@@ -103,12 +103,12 @@ void App::terminate(){
 
 unsigned int App::width(){
     int width;
-    glfwGetWindowSize(window, &width, nullptr);
+    glfwGetWindowSize(m_window, &width, nullptr);
     return width;
 }
 
 unsigned int App::height(){
     int height;
-    glfwGetWindowSize(window, nullptr, &height);
+    glfwGetWindowSize(m_window, nullptr, &height);
     return height;
 }

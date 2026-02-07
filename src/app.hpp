@@ -6,8 +6,8 @@ using namespace std;
 
 class App {
     private:
-        GLFWwindow *window;
-        bool cursorHidden = false;
+        GLFWwindow *m_window;
+        bool m_cursorHidden = false;
 
     public:
         void init(int width, int height, const char *name, GLFWframebuffersizefun framebuffer_size_callback);

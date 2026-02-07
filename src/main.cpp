@@ -10,7 +10,7 @@
 
 using namespace std;
 
-#define SAMPLES 10
+#define SAMPLES 2
 #define BSDF_TYPES 3
 
 ShaderProgram rayTraceShader;
@@ -24,6 +24,8 @@ int frameAccumulator = SAMPLES;
 int samples = SAMPLES;
 int bsdfType = 0;
 int bsdfWeighting = 0;
+unsigned int texWidth, texHeight;
+const unsigned int RES_MUL = 3;
 Camera camera(0.1, 0.3);
 App app;
 
@@ -40,25 +42,35 @@ string getShaderSource(const char *filepath){
     return shaderText.str();
 }
 
+void genTexture(unsigned int width, unsigned int height){
+    glGenTextures(1, &texture);
+    glBindTexture(GL_TEXTURE_2D, texture);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA32F, width, height, 0, GL_RGBA, GL_FLOAT, NULL);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+    glBindTexture(GL_TEXTURE_2D, 0);
+
+    glGenTextures(1, &oldTexture);
+    glBindTexture(GL_TEXTURE_2D, oldTexture);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA32F, width, height, 0, GL_RGBA, GL_FLOAT, NULL);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+    glBindTexture(GL_TEXTURE_2D, 0);
+
+    samples = SAMPLES;
+    frameAccumulator = SAMPLES;
+    texWidth = width;
+    texHeight = height;
+}
+
 void framebuffer_size_callback(GLFWwindow*, int width, int height)
 {
     glViewport(0, 0, width, height);
-    glGenTextures(1, &texture);
-    glBindTexture(GL_TEXTURE_2D, texture);
-    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA32F, app.width(), app.height(), 0, GL_RGBA, GL_FLOAT, NULL);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
-    glBindTexture(GL_TEXTURE_2D, 0);
-    
-    glGenTextures(1, &oldTexture);
-    glBindTexture(GL_TEXTURE_2D, oldTexture);
-    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA32F, app.width(), app.height(), 0, GL_RGBA, GL_FLOAT, NULL);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
-    glBindTexture(GL_TEXTURE_2D, 0);
+    genTexture(width, height);
 
-    samples = 1;
-    frameAccumulator = 1;
+    rayTraceShader.use();
+    int winSizeLoc = glGetUniformLocation(rayTraceShader.id(), "winSize");
+    glUniform2f(winSizeLoc, width, height);
 }
 
 void init(){
@@ -87,22 +99,14 @@ void init(){
     };  
     tie(VBO, VAO, EBO) = ShaderProgram::addData(vertices, indices);
     ShaderProgram::linkData(3, sizeof(float), 0);
+
+    rayTraceShader.use();
+    int winSizeLoc = glGetUniformLocation(rayTraceShader.id(), "winSize");
+    glUniform2f(winSizeLoc, app.width(), app.height());
     
     glGenFramebuffers(1, &FBO);
     
-    glGenTextures(1, &texture);
-    glBindTexture(GL_TEXTURE_2D, texture);
-    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA32F, app.width(), app.height(), 0, GL_RGBA, GL_FLOAT, NULL);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
-    glBindTexture(GL_TEXTURE_2D, 0);
-    
-    glGenTextures(1, &oldTexture);
-    glBindTexture(GL_TEXTURE_2D, oldTexture);
-    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA32F, app.width(), app.height(), 0, GL_RGBA, GL_FLOAT, NULL);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
-    glBindTexture(GL_TEXTURE_2D, 0);
+    genTexture(app.width(), app.height());
     
     glDisable(GL_FRAMEBUFFER_SRGB);
 }
@@ -132,7 +136,7 @@ void render(){
     rayTraceShader.use();
     
     glUniform1f(1, static_cast<float>(glfwGetTime()));
-    glUniform2f(2, app.width(), app.height());
+    glUniform2f(2, texWidth, texHeight);
     glActiveTexture(GL_TEXTURE0);
     glBindTexture(GL_TEXTURE_2D, oldTexture);
     glUniform1i(3, 0);
@@ -145,7 +149,6 @@ void render(){
     int camDirLoc = glGetUniformLocation(rayTraceShader.id(), "camera.lookDir");
     glUniform3f(camDirLoc, camera.lookDir().x, camera.lookDir().y, camera.lookDir().z);
     
-    
     glBindVertexArray(VAO);
     glDrawElements(GL_TRIANGLES, 6, GL_UNSIGNED_INT, 0);
     
@@ -156,7 +159,8 @@ void render(){
     glBindFramebuffer(GL_FRAMEBUFFER, 0);
     accumulationShader.use();
     
-    glBindTexture(GL_TEXTURE_2D, texture);
+    glBindTexture(GL_TEXTURE_2D, oldTexture);
+    glUniform1i(1, 0);
     glDrawElements(GL_TRIANGLES, 6, GL_UNSIGNED_INT, 0);
 }
 
@@ -172,13 +176,13 @@ void inputs(){
     if (app.keyPressedOnce(GLFW_KEY_ENTER, frameCount))
         app.toggleCursor(false);
 
-    if (app.keyPressedOnce(GLFW_KEY_KP_ADD, frameCount)){
+    if (app.keyPressedOnce(GLFW_KEY_RIGHT, frameCount)){
         frameAccumulator = samples;
         bsdfType = (bsdfType + 1) % BSDF_TYPES;
         cout << "BSDF type : " << bsdfType << endl;
     }
     
-    if (app.keyPressedOnce(GLFW_KEY_KP_SUBTRACT, frameCount)){
+    if (app.keyPressedOnce(GLFW_KEY_LEFT, frameCount)){
         frameAccumulator = samples;
         bsdfType = (bsdfType - 1 + BSDF_TYPES) % BSDF_TYPES;
         cout << "BSDF type : " << bsdfType << endl;
@@ -209,12 +213,9 @@ int main(){
     init();
     while(!app.shouldClose())
     {
-        app.startFrame(frameAccumulator);
+        app.startFrame(frameCount);
         handleCamera();
-        if (camera.getIsMoving()){
-            samples = 3;
-            frameAccumulator = 3;
-        }
+        
         render();
         inputs();
         
@@ -222,6 +223,18 @@ int main(){
         samples = SAMPLES;
         frameAccumulator += samples;
         frameCount++;
+
+        if (camera.getIsMoving(frameCount)){
+            samples = SAMPLES;
+            frameAccumulator = SAMPLES;
+            if (texWidth != app.width() / RES_MUL) 
+                genTexture(app.width() / RES_MUL, app.height() / RES_MUL);
+        }
+        else if (texWidth != app.width()){
+            samples = SAMPLES;
+            frameAccumulator = SAMPLES;
+            genTexture(app.width(), app.height());
+        }
     }
     end();
     return EXIT_SUCCESS;
