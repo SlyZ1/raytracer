@@ -11,7 +11,9 @@
 using namespace std;
 
 #define SAMPLES 2
+#define MAX_BOUNCES 15
 #define BSDF_TYPES 3
+#define RES_MUL 2
 
 ShaderProgram rayTraceShader;
 ShaderProgram accumulationShader;
@@ -22,10 +24,10 @@ unsigned int oldTexture;
 int frameCount = 0;
 int frameAccumulator = SAMPLES;
 int samples = SAMPLES;
+int maxBounces = MAX_BOUNCES;
 int bsdfType = 0;
 int bsdfWeighting = 0;
 unsigned int texWidth, texHeight;
-const unsigned int RES_MUL = 3;
 Camera camera(0.1, 0.3);
 App app;
 
@@ -74,7 +76,7 @@ void framebuffer_size_callback(GLFWwindow*, int width, int height)
 }
 
 void init(){
-    app.init(800, 600, "GLSL Project", framebuffer_size_callback);
+    app.init(1080, 720, "Basic Raytracer", framebuffer_size_callback);
     app.toggleCursor(false);
     
     rayTraceShader.create();
@@ -144,6 +146,7 @@ void render(){
     glUniform1i(5, bsdfType);
     glUniform1i(6, bsdfWeighting);
     glUniform1i(7, samples);
+    glUniform1i(9, maxBounces);
     int camPosLoc = glGetUniformLocation(rayTraceShader.id(), "camera.pos");
     glUniform3f(camPosLoc, camera.position().x, camera.position().y, camera.position().z);
     int camDirLoc = glGetUniformLocation(rayTraceShader.id(), "camera.lookDir");
@@ -169,12 +172,14 @@ void inputs(){
         cout << "Frame Time: " << glfwGetTime() << "s with " << frameAccumulator << " samples." << endl;
     
     if (app.keyPressedOnce(GLFW_KEY_ESCAPE, frameCount)){
-        cout << "Toggling cursor." << endl;
+        if (app.cursorIsHidden()) cout << "Toggling cursor. (true)" << endl;
         app.toggleCursor(true);
     }
     
-    if (app.keyPressedOnce(GLFW_KEY_ENTER, frameCount))
+    if (app.keyPressedOnce(GLFW_KEY_ENTER, frameCount)){
+        if (!app.cursorIsHidden()) cout << "Toggling cursor. (false)" << endl;
         app.toggleCursor(false);
+    }
 
     if (app.keyPressedOnce(GLFW_KEY_RIGHT, frameCount)){
         frameAccumulator = samples;
@@ -201,6 +206,22 @@ void inputs(){
     }
 }
 
+void dynamicResolution(){
+    if (camera.getIsMoving(frameCount)){
+        samples = SAMPLES;
+        frameAccumulator = SAMPLES;
+        maxBounces = 4;
+        if (texWidth != app.width() / RES_MUL) 
+            genTexture(app.width() / RES_MUL, app.height() / RES_MUL);
+    }
+    else if (texWidth != app.width()){
+        maxBounces = MAX_BOUNCES;
+        samples = SAMPLES;
+        frameAccumulator = SAMPLES;
+        genTexture(app.width(), app.height());
+    }
+}
+
 void end(){
     glDeleteVertexArrays(1, &VAO);
     glDeleteBuffers(1, &VBO);
@@ -224,17 +245,7 @@ int main(){
         frameAccumulator += samples;
         frameCount++;
 
-        if (camera.getIsMoving(frameCount)){
-            samples = SAMPLES;
-            frameAccumulator = SAMPLES;
-            if (texWidth != app.width() / RES_MUL) 
-                genTexture(app.width() / RES_MUL, app.height() / RES_MUL);
-        }
-        else if (texWidth != app.width()){
-            samples = SAMPLES;
-            frameAccumulator = SAMPLES;
-            genTexture(app.width(), app.height());
-        }
+        dynamicResolution();
     }
     end();
     return EXIT_SUCCESS;
