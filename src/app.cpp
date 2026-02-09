@@ -1,4 +1,7 @@
 #include <iostream>
+#include <imgui/imgui.h>
+#include <imgui/imgui_impl_opengl3.h>
+#include <imgui/imgui_impl_glfw.h>
 #include <glad/glad.h>
 #include <GLFW/glfw3.h>
 #include "app.hpp"
@@ -34,6 +37,13 @@ void App::init(int width, int height, const char *name, GLFWframebuffersizefun f
 
     glViewport(0, 0, width, height);
     glfwSetFramebufferSizeCallback(m_window, framebuffer_size_callback);
+
+    IMGUI_CHECKVERSION();
+    ImGui::CreateContext();
+    m_io = &ImGui::GetIO(); (void)(*m_io);
+    ImGui::StyleColorsDark();
+    ImGui_ImplGlfw_InitForOpenGL(m_window, true);
+    ImGui_ImplOpenGL3_Init("#version 430");
 }
 
 void App::setClearColor(float r, float g, float b, float a){
@@ -41,12 +51,19 @@ void App::setClearColor(float r, float g, float b, float a){
 }
 
 void App::startFrame(int frame){
-    if(keyPressedOnce(GLFW_KEY_ESCAPE, frame) && !m_cursorHidden)
+    if(keyPressedOnce(GLFW_KEY_ESCAPE, frame))
         glfwSetWindowShouldClose(m_window, true);
     glClear(GL_COLOR_BUFFER_BIT);
+
+    ImGui_ImplOpenGL3_NewFrame();
+    ImGui_ImplGlfw_NewFrame();
+    ImGui::NewFrame();
 }
 
-void App::eventAndSwapBuffers(){
+void App::endFrame(){
+    ImGui::Render();
+    ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());
+
     glfwSwapBuffers(m_window);
     glfwPollEvents();
 }
@@ -83,6 +100,18 @@ bool App::keyPressedOnce(int key, int frame){
     }
 
     return false;
+}
+
+bool App::UIInteract(){
+    return m_io->WantCaptureMouse || m_io->WantCaptureKeyboard;
+}
+
+bool App::UIDrag(){
+    return ImGui::IsMouseDragging(0);
+}
+
+ImGuiIO* App::getIo(){
+    return m_io;
 }
 
 float App::mouseX(){

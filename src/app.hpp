@@ -8,17 +8,21 @@ class App {
     private:
         GLFWwindow *m_window;
         bool m_cursorHidden = false;
+        ImGuiIO* m_io = {};
 
     public:
         void init(int width, int height, const char *name, GLFWframebuffersizefun framebuffer_size_callback);
         void setClearColor(float r, float g, float b, float a);
         void startFrame(int frame);
-        void eventAndSwapBuffers();
+        void endFrame();
         void toggleCursor(bool hide);
         bool cursorIsHidden();
         bool shouldClose();
         bool keyPressed(int key);
         bool keyPressedOnce(int key, int frame);
+        bool UIInteract();
+        bool UIDrag();
+        ImGuiIO* getIo();
         float mouseX();
         float mouseY();
         void terminate();

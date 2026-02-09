@@ -7,13 +7,21 @@
             "args": [
                 "-g",
                 "-std=c++17",
+                
                 "-I${workspaceFolder}/include",
+                "-I${workspaceFolder}/include/imgui",
+
                 "-L${workspaceFolder}/lib",
+
                 "${workspaceFolder}/src/*.cpp",
+                "${workspaceFolder}/include/imgui/*.cpp",
                 "${workspaceFolder}/src/glad.c",
+
                 "-lglfw3dll",
+
                 "-o",
                 "${workspaceFolder}/myprogram.exe",
+
                 "-Wall",
                 "-Wextra"
             ],

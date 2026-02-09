@@ -19,6 +19,7 @@ class Camera {
             : m_moveSensitivity(moveSensitivity), m_lookSensitivity(lookSensitivity) {}
         void move(bool forward, bool backward, bool right, bool left, bool up, bool down, bool sprinting);
         void rotate(float mouseX, float mouseY);
+        void resetMousePos(float mouseX, float mouseY);
         vec3 lookDir();
         vec3 position() {return m_pos;};
         bool getIsMoving(int frame);

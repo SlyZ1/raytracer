@@ -1,6 +1,9 @@
 #include <iostream>
 #include <fstream>
 #include <sstream>
+#include <imgui/imgui.h>
+#include <imgui/imgui_impl_opengl3.h>
+#include <imgui/imgui_impl_glfw.h>
 #include <glad/glad.h>
 #include <GLFW/glfw3.h>
 #include <vector>
@@ -11,9 +14,7 @@
 using namespace std;
 
 #define SAMPLES 2
-#define MAX_BOUNCES 15
-#define BSDF_TYPES 3
-#define RES_MUL 2
+
 
 ShaderProgram rayTraceShader;
 ShaderProgram accumulationShader;
@@ -21,13 +22,16 @@ unsigned int VBO, VAO, EBO;
 unsigned int FBO;
 unsigned int texture;
 unsigned int oldTexture;
+unsigned int texWidth, texHeight;
+float roughness = 0;
+int resMultiplier = 2;
+int maxBounces = 15;
 int frameCount = 0;
 int frameAccumulator = SAMPLES;
 int samples = SAMPLES;
-int maxBounces = MAX_BOUNCES;
-int bsdfType = 0;
-int bsdfWeighting = 0;
-unsigned int texWidth, texHeight;
+int bounces = maxBounces;
+int bsdfType = 3;
+bool showUI = false;
 Camera camera(0.1, 0.3);
 App app;
 
@@ -42,6 +46,10 @@ string getShaderSource(const char *filepath){
     stringstream shaderText;
     shaderText << file.rdbuf(); 
     return shaderText.str();
+}
+
+void resetFrame(){
+    frameAccumulator = samples;
 }
 
 void genTexture(unsigned int width, unsigned int height){
@@ -60,7 +68,7 @@ void genTexture(unsigned int width, unsigned int height){
     glBindTexture(GL_TEXTURE_2D, 0);
 
     samples = SAMPLES;
-    frameAccumulator = SAMPLES;
+    resetFrame();
     texWidth = width;
     texHeight = height;
 }
@@ -144,9 +152,9 @@ void render(){
     glUniform1i(3, 0);
     glUniform1i(4, frameAccumulator);
     glUniform1i(5, bsdfType);
-    glUniform1i(6, bsdfWeighting);
+    glUniform1f(6, roughness);
     glUniform1i(7, samples);
-    glUniform1i(9, maxBounces);
+    glUniform1i(9, bounces);
     int camPosLoc = glGetUniformLocation(rayTraceShader.id(), "camera.pos");
     glUniform3f(camPosLoc, camera.position().x, camera.position().y, camera.position().z);
     int camDirLoc = glGetUniformLocation(rayTraceShader.id(), "camera.lookDir");
@@ -168,56 +176,30 @@ void render(){
 }
 
 void inputs(){
+    if (app.UIInteract()) return;
+
     if (app.keyPressedOnce(GLFW_KEY_K, frameCount))
         cout << "Frame Time: " << glfwGetTime() << "s with " << frameAccumulator << " samples." << endl;
     
-    if (app.keyPressedOnce(GLFW_KEY_ESCAPE, frameCount)){
-        if (app.cursorIsHidden()) cout << "Toggling cursor. (true)" << endl;
-        app.toggleCursor(true);
-    }
-    
-    if (app.keyPressedOnce(GLFW_KEY_ENTER, frameCount)){
-        if (!app.cursorIsHidden()) cout << "Toggling cursor. (false)" << endl;
-        app.toggleCursor(false);
-    }
-
-    if (app.keyPressedOnce(GLFW_KEY_RIGHT, frameCount)){
-        frameAccumulator = samples;
-        bsdfType = (bsdfType + 1) % BSDF_TYPES;
-        cout << "BSDF type : " << bsdfType << endl;
-    }
-    
-    if (app.keyPressedOnce(GLFW_KEY_LEFT, frameCount)){
-        frameAccumulator = samples;
-        bsdfType = (bsdfType - 1 + BSDF_TYPES) % BSDF_TYPES;
-        cout << "BSDF type : " << bsdfType << endl;
-    }
-    
-    if (app.keyPressedOnce(GLFW_KEY_UP, frameCount)){
-        frameAccumulator = samples;
-        bsdfWeighting = std::clamp(bsdfWeighting + 1, 0, 8);
-        cout << "BSDF weighting : " << bsdfWeighting << endl;
-    }
-    
-    if (app.keyPressedOnce(GLFW_KEY_DOWN, frameCount)){
-        frameAccumulator = samples;
-        bsdfWeighting = std::clamp(bsdfWeighting - 1, 0, 8);
-        cout << "BSDF weighting : " << bsdfWeighting << endl;
+    if (app.keyPressedOnce(GLFW_KEY_P, frameCount)){
+        showUI = !showUI;
+        app.toggleCursor(showUI);
+        camera.resetMousePos(app.mouseX(), app.mouseY());
     }
 }
 
 void dynamicResolution(){
-    if (camera.getIsMoving(frameCount)){
-        samples = SAMPLES;
-        frameAccumulator = SAMPLES;
-        maxBounces = 4;
-        if (texWidth != app.width() / RES_MUL) 
-            genTexture(app.width() / RES_MUL, app.height() / RES_MUL);
+    if (camera.getIsMoving(frameCount) || app.UIDrag()){
+        samples = 1;
+        resetFrame();
+        bounces = 4;
+        if (texWidth != app.width() / resMultiplier) 
+            genTexture(app.width() / resMultiplier, app.height() / resMultiplier);
     }
     else if (texWidth != app.width()){
-        maxBounces = MAX_BOUNCES;
+        bounces = maxBounces;
         samples = SAMPLES;
-        frameAccumulator = SAMPLES;
+        resetFrame();
         genTexture(app.width(), app.height());
     }
 }
@@ -230,6 +212,33 @@ void end(){
     app.terminate();
 }
 
+void UI(){
+    if (!showUI) return;
+
+    ImGui::SetNextWindowPos(ImVec2(0, 0), ImGuiCond_Always);
+    ImGui::SetNextWindowSize(ImVec2(300, app.getIo()->DisplaySize.y), ImGuiCond_Always);
+
+    ImGui::Begin("Parameters");
+
+    if (ImGui::InputInt("Max Bounces", &maxBounces)) resetFrame();
+    ImGui::InputInt("Resolution Divider", &resMultiplier);
+    resMultiplier = glm::max(resMultiplier, 1);
+
+    const char* items[] = { 
+        "Lambert", 
+        "Qualitative Oren-Nayar (QON)", 
+        "Fujii-Oren-Nayar (FON)", 
+        "Energy-Preserving Oren-Nayar (EON)"
+    };
+    if (ImGui::Combo("Diffuse Model", &bsdfType, items, IM_ARRAYSIZE(items)))
+        resetFrame();
+
+    if (ImGui::SliderFloat("Ball's Roughness", &roughness, 0, 1))
+        resetFrame();
+
+    ImGui::End();
+}
+
 int main(){
     init();
     while(!app.shouldClose())
@@ -240,12 +249,13 @@ int main(){
         render();
         inputs();
         
-        app.eventAndSwapBuffers();
+        UI();
+        
         samples = SAMPLES;
         frameAccumulator += samples;
         frameCount++;
-
         dynamicResolution();
+        app.endFrame();
     }
     end();
     return EXIT_SUCCESS;

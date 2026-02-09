@@ -23,6 +23,11 @@ void Camera::move(bool forward, bool backward, bool right, bool left, bool up, b
         m_pos += (sprinting ? 2 : 1) * m_moveSensitivity * normalize(moveForward + moveUp + moveRight);
 }
 
+void Camera::resetMousePos(float mouseX, float mouseY){
+    m_lastMouseX = mouseX;
+    m_lastMouseY = mouseY;
+}
+
 void Camera::rotate(float mouseX, float mouseY){
     float deltaMouseX = mouseX - m_lastMouseX;
     float deltaMouseY = mouseY - m_lastMouseY;
