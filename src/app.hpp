@@ -16,6 +16,7 @@ class App {
         void startFrame(int frame);
         void endFrame();
         void toggleCursor(bool hide);
+        void exportImage();
         bool cursorIsHidden();
         bool shouldClose();
         bool keyPressed(int key);

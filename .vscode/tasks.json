@@ -10,11 +10,15 @@
                 
                 "-I${workspaceFolder}/include",
                 "-I${workspaceFolder}/include/imgui",
+                "-I${workspaceFolder}/include/lodepng",
+                "-I${workspaceFolder}/include/tinyobjloader",
 
                 "-L${workspaceFolder}/lib",
 
                 "${workspaceFolder}/src/*.cpp",
                 "${workspaceFolder}/include/imgui/*.cpp",
+                "${workspaceFolder}/include/lodepng/*.cpp",
+                "${workspaceFolder}/include/tinyobjloader/*.cpp",
                 "${workspaceFolder}/src/glad.c",
 
                 "-lglfw3dll",

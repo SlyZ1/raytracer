@@ -6,10 +6,10 @@
 #include <imgui/imgui_impl_glfw.h>
 #include <glad/glad.h>
 #include <GLFW/glfw3.h>
-#include <vector>
 #include "app.hpp"
 #include "shader_program.hpp"
 #include "camera.hpp"
+#include "mesh.hpp"
 
 using namespace std;
 
@@ -23,6 +23,8 @@ unsigned int FBO;
 unsigned int texture;
 unsigned int oldTexture;
 unsigned int texWidth, texHeight;
+float metalColor[3] = {1,1,1};
+float metallic = 0;
 float roughness = 0;
 int resMultiplier = 2;
 int maxBounces = 15;
@@ -113,6 +115,17 @@ void init(){
     rayTraceShader.use();
     int winSizeLoc = glGetUniformLocation(rayTraceShader.id(), "winSize");
     glUniform2f(winSizeLoc, app.width(), app.height());
+
+    Mesh* mesh = new Mesh();
+    mesh->loadFromModel("models/Cube.obj");
+    vector<Triangle> triangles = mesh->getTriangles();
+    GLuint ssbo;
+    glGenBuffers(1, &ssbo);
+    glBindBuffer(GL_SHADER_STORAGE_BUFFER, ssbo);
+    glBufferData(GL_SHADER_STORAGE_BUFFER, triangles.size() * sizeof(Triangle), triangles.data(), GL_STATIC_DRAW);
+    glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 0, ssbo); // binding 0
+    glBindBuffer(GL_SHADER_STORAGE_BUFFER, 0);
+    glUniform1i(10, triangles.size());
     
     glGenFramebuffers(1, &FBO);
     
@@ -145,7 +158,7 @@ void render(){
     glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, texture, 0);
     rayTraceShader.use();
     
-    glUniform1f(1, static_cast<float>(glfwGetTime()));
+    glUniform4f(1, metalColor[0], metalColor[1], metalColor[2], metallic);
     glUniform2f(2, texWidth, texHeight);
     glActiveTexture(GL_TEXTURE0);
     glBindTexture(GL_TEXTURE_2D, oldTexture);
@@ -189,6 +202,9 @@ void inputs(){
 }
 
 void dynamicResolution(){
+    if (app.UIInteract()) samples = 1;
+    else samples = SAMPLES;
+
     if (camera.getIsMoving(frameCount) || app.UIDrag()){
         samples = 1;
         resetFrame();
@@ -218,7 +234,17 @@ void UI(){
     ImGui::SetNextWindowPos(ImVec2(0, 0), ImGuiCond_Always);
     ImGui::SetNextWindowSize(ImVec2(300, app.getIo()->DisplaySize.y), ImGuiCond_Always);
 
-    ImGui::Begin("Parameters");
+    ImGui::Begin("Parameters", (bool*)NULL, ImGuiWindowFlags_MenuBar);
+
+    if (ImGui::BeginMenuBar())
+    {
+        if (ImGui::BeginMenu("Image"))
+        {
+            if (ImGui::MenuItem("Render", "R")) app.exportImage();
+            ImGui::EndMenu();
+        }
+        ImGui::EndMenuBar();
+    }
 
     if (ImGui::InputInt("Max Bounces", &maxBounces)) resetFrame();
     ImGui::InputInt("Resolution Divider", &resMultiplier);
@@ -234,6 +260,12 @@ void UI(){
         resetFrame();
 
     if (ImGui::SliderFloat("Ball's Roughness", &roughness, 0, 1))
+        resetFrame();
+    
+    if (ImGui::ColorEdit3("Metal Color", metalColor)) 
+        resetFrame();
+
+    if (ImGui::SliderFloat("Metallic", &metallic, 0, 1)) 
         resetFrame();
 
     ImGui::End();

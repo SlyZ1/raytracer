@@ -4,6 +4,8 @@
 #include <imgui/imgui_impl_glfw.h>
 #include <glad/glad.h>
 #include <GLFW/glfw3.h>
+#include <vector>
+#include <lodepng/lodepng.h>
 #include "app.hpp"
 
 using namespace std;
@@ -73,6 +75,38 @@ void App::toggleCursor(bool show){
     glfwSetInputMode(m_window, GLFW_CURSOR, !show ? GLFW_CURSOR_DISABLED : GLFW_CURSOR_NORMAL);
 }
 
+void App::exportImage(){
+    glBindFramebuffer(GL_FRAMEBUFFER, 0);
+
+    std::vector<unsigned char> pixels(width() * height() * 3);
+    auto data = pixels.data();
+
+    glPixelStorei(GL_PACK_ALIGNMENT, 1);
+
+    glReadPixels(
+        0, 0,
+        width(), height(),
+        GL_RGB,
+        GL_UNSIGNED_BYTE,
+        data
+    );
+
+    //flip vertical
+    int stride = width() * 3;
+    std::vector<unsigned char> row(stride);
+
+    for (unsigned int y = 0; y < height() / 2; y++) {
+        unsigned char* row1 = data + y * stride;
+        unsigned char* row2 = data + (height() - y - 1) * stride;
+
+        memcpy(row.data(), row1, stride);
+        memcpy(row1, row2, stride);
+        memcpy(row2, row.data(), stride);
+    }
+
+    lodepng::encode("outputs/image.png", pixels, width(), height(), LCT_RGB);
+}
+
 bool App::cursorIsHidden(){
     return m_cursorHidden;
 }
@@ -107,7 +141,7 @@ bool App::UIInteract(){
 }
 
 bool App::UIDrag(){
-    return ImGui::IsMouseDragging(0);
+    return ImGui::IsMouseDragging(0) && UIInteract();
 }
 
 ImGuiIO* App::getIo(){
