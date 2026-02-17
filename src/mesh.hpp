@@ -23,7 +23,9 @@ struct Triangle {
 
 struct AABB {
     glm::vec3 min;
+    float pad0;
     glm::vec3 max;
+    float pad1;
 
     void expand(const glm::vec3& p) {
         min.x = std::min(min.x, p.x);
@@ -44,7 +46,15 @@ struct BVHNode {
     AABB bounds;
     BVHNode* left = nullptr;
     BVHNode* right = nullptr;
-    std::vector<Triangle> triangles;
+    int triangle = -1;
+};
+
+struct linBVHNode {
+    AABB bounds;
+    int left = -1;
+    int right = -1;
+    int triangle = -1;
+    int pad = -1;
 };
 
 class Mesh {
@@ -52,12 +62,13 @@ public:
     Mesh();
     void loadFromModel(const char* path);
     vector<Triangle> getTriangles() const;
-    BVHNode* computeBVH(const std::vector<Triangle>& triangles, int start, int end) const;
+    static BVHNode* computeBVH(vector<Triangle>& triangles, vector<int>& indices, int begin, int end);
+    static vector<linBVHNode> lineariseBVH(BVHNode* node, const vector<Triangle>& triangles);
 
 private:
     vector<Triangle> m_triangles = {};
-    AABB triangleBounds(const Triangle& tri) const;
-    AABB computeBounds(const std::vector<Triangle>& triangles, int start, int end) const;
+    static AABB triangleBounds(const Triangle& tri);
+    static AABB computeBounds(const vector<Triangle>& triangles, int start, int end);
 };
 
 #endif

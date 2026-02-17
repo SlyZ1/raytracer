@@ -74,7 +74,7 @@ vector<Triangle> Mesh::getTriangles() const {
     return m_triangles;
 }
 
-AABB Mesh::triangleBounds(const Triangle& tri) const {
+AABB Mesh::triangleBounds(const Triangle& tri) {
     AABB box;
     box.min =  {std::min({tri.v3.x, tri.v1.x, tri.v2.x}),
                 std::min({tri.v3.y, tri.v1.y, tri.v2.y}),
@@ -85,14 +85,85 @@ AABB Mesh::triangleBounds(const Triangle& tri) const {
     return box;
 }
 
-AABB Mesh::computeBounds(const std::vector<Triangle>& triangles, int start, int end) const {
+AABB Mesh::computeBounds(const vector<Triangle>& triangles, int start, int end) {
     AABB box = triangleBounds(triangles[start]);
     for(int i = start + 1; i < end; ++i)
         box.expand(triangleBounds(triangles[i]));
     return box;
 }
 
-BVHNode* Mesh::computeBVH(const std::vector<Triangle>& triangles, int start, int end) const {
+BVHNode* Mesh::computeBVH(vector<Triangle>& triangles, 
+                          vector<int>& indices,
+                          int begin, int end) {
     BVHNode* node = new BVHNode();
+
+    node->bounds = triangleBounds(triangles[indices[begin]]);
+    for (int i = begin + 1; i < end; ++i)
+        node->bounds.expand(triangleBounds(triangles[indices[i]]));
+
+    const int MAX_TRIANGLES_PER_LEAF = 1;
+    if (end - begin <= MAX_TRIANGLES_PER_LEAF) {
+        node->triangle = indices[begin]; 
+        return node;
+    }
+
+    AABB centroidBounds;
+    centroidBounds.min = centroidBounds.max = triangles[indices[begin]].centroid();
+    for (int i = begin + 1; i < end; ++i)
+        centroidBounds.expand(triangles[indices[i]].centroid());
+
+    glm::vec3 extent = centroidBounds.max - centroidBounds.min;
+    int axis = 0;
+    if (extent.y > extent.x && extent.y > extent.z)
+        axis = 1;
+    else if (extent.z > extent.x)
+        axis = 2;
+
+    std::sort(indices.begin() + begin, indices.begin() + end,
+        [&triangles, axis](int a, int b) {
+            return triangles[a].centroid()[axis] < triangles[b].centroid()[axis];
+        });
+
+    int mid = begin + (end - begin) / 2;
+
+    node->left = computeBVH(triangles, indices, begin, mid);
+    node->right = computeBVH(triangles, indices, mid, end);
+
     return node;
+}
+
+int indexOfTriangle(const vector<Triangle>& triangles, const Triangle& triangle){
+    for(int i = 0; i < triangles.size(); i++){
+        Triangle tri = triangles[i];
+        if (tri.v1 == triangle.v1 && tri.v2 == triangle.v2 && tri.v3 == triangle.v3){
+            return i;
+        }
+    }
+    return -1;
+}
+
+int lineariseRec(BVHNode* node, vector<linBVHNode>& nodes, const vector<Triangle>& triangles){
+    if (node == nullptr){
+        return -1;
+    }
+
+    int left = lineariseRec(node->left, nodes, triangles);
+    int right = lineariseRec(node->right, nodes, triangles);
+    int triangle = node->triangle;
+
+    linBVHNode linNode = {
+        node->bounds,
+        left,
+        right,
+        triangle
+    };
+    int i = nodes.size();
+    nodes.push_back(linNode);
+    return i;
+}
+
+vector<linBVHNode> Mesh::lineariseBVH(BVHNode* node, const vector<Triangle>& triangles){
+    vector<linBVHNode> nodes = {};
+    lineariseRec(node, nodes, triangles);
+    return nodes;
 }

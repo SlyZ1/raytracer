@@ -23,6 +23,18 @@ struct Triangle {
     vec3 v2;
 };
 
+struct AABB {
+    vec3 min;
+    vec3 max;
+};
+
+struct BVHNode {
+    AABB aabb;
+    int left;
+    int right;
+    int triangle;
+};
+
 struct Light {
     vec3 pos;
     float rad;
@@ -53,7 +65,14 @@ struct Hit {
 layout(std430, binding = 0) buffer TrianglesBuffer {
     Triangle triangles[];
 };
+uniform int numTriangles;
 
+layout(std430, binding = 1) buffer BVHBuffer {
+    BVHNode nodes[];
+};
+uniform int numBVHNodes;
+uniform int debugBVH;
+uniform vec3 modelPos;
 
 #define NUM_SPHERE 1
 #define NUM_PLANE 1
@@ -83,7 +102,6 @@ layout (location = 6) uniform float ballRoughness;
 layout (location = 7) uniform int samples;
 layout (location = 8) uniform vec2 winSize;
 layout (location = 9) uniform int maxBounces;
-layout (location = 10) uniform int numTriangles;
 uniform Camera camera;
 in vec4 vClipPos;
 
@@ -282,8 +300,8 @@ Hit planeIntersect(Plane plane, Ray ray){
     if (t <= 0 || dot(difference, difference) > 10000) 
         return hit;
 
-    if (int((abs(relativePoint.x + 1) * 0.5) + int(abs(relativePoint.z + 1) * 0.5 + 1)) % 2 == 0) 
-        plane.mat = Mat(plane.mat.type, vec3(0.83), mNoData());
+    /*if (int((abs(relativePoint.x + 1) * 0.5) + int(abs(relativePoint.z + 1) * 0.5 + 1)) % 2 == 0) 
+        plane.mat = Mat(plane.mat.type, vec3(0.83), mNoData());*/
 
     return Hit(t, plane.normal, plane.mat, false);
 }
@@ -322,10 +340,93 @@ Hit triangleIntersect(Triangle tri, Ray ray){
     vec3 normal = computeNormal(tri);
     bool isInside = dot(normal, ray.dir) > 0;
 
-    return Hit(t, normal, Mat(MAT_GLASS, vec3(0.8,0.9,1) * 0.3, mData0(1.5)), isInside);
+    return Hit(t, normal, Mat(MAT_PBR, vec3(0.7,0.9,1), mData(0.4,1)), isInside);
 }
 
-Hit rayIntersection(World world, Ray ray){
+Hit intersectAABB(Ray ray, AABB box, float tMin, float tMax)
+{
+    Hit hit;
+    hit.t = -1.0f;
+    
+    float tmin = tMin;
+    float tmax = tMax;
+    
+    for (int i = 0; i < 3; i++) {
+        if (abs(ray.dir[i]) < 1e-8f) {
+            continue;
+        }
+        
+        float invD = 1 / ray.dir[i];
+        float t0 = (box.min[i] - ray.origin[i]) * invD;
+        float t1 = (box.max[i] - ray.origin[i]) * invD;
+        
+        if (invD < 0.0f) {
+            float temp = t1;
+            t1 = t0;
+            t0 = temp;
+        }
+        
+        tmin = max(tmin, t0);
+        tmax = min(tmax, t1);
+        
+        if (tmax < tmin) {
+            return hit;
+        }
+    }
+    
+    hit.t = tmin;
+    hit.normal = -ray.dir;
+    return hit;
+}
+
+Hit bvhIntersect(inout Ray ray)
+{
+    ray.origin -= modelPos;
+    const int STACK_SIZE = 32;
+
+    int stack[STACK_SIZE];
+    int stackPtr = 0;
+
+    stack[stackPtr++] = numBVHNodes - 1;
+
+    float hitT = 100000;
+    float hitTri = -1;
+    Hit hit;
+    hit.t = -2;
+
+    while (stackPtr > 0) {
+
+        int nodeIndex = stack[--stackPtr];
+        BVHNode node = nodes[nodeIndex];
+
+        Hit boxHit = intersectAABB(ray, node.aabb, 0.001, hitT);
+        if (boxHit.t < 0) continue;
+        if (debugBVH > 0) ray.throughput *= 0.95;
+
+        if (node.triangle >= 0) {
+            Hit triHit = triangleIntersect(triangles[node.triangle], ray);
+            if (triHit.t >= 0) {
+                if (triHit.t < hitT) {
+                    hitT = triHit.t;
+                    hitTri = node.triangle;
+                    hit = triHit;
+                }
+            }
+        }
+        else {
+            if (node.left >= 0)
+                stack[stackPtr++] = node.left;
+
+            if (node.right >= 0)
+                stack[stackPtr++] = node.right;
+        }
+    }
+
+    ray.origin += modelPos;
+    return hit;
+}
+
+Hit rayIntersection(World world, inout Ray ray){
     Hit hit;
     hit.t = 100000;
     for(int i = 0; i < NUM_SPHERE; i += 1){
@@ -344,10 +445,8 @@ Hit rayIntersection(World world, Ray ray){
         if (lightHit.t > 0 && lightHit.t < hit.t) hit = lightHit;
     }
 #endif
-    for(int i = 0; i < numTriangles; i++) {
-        Hit triHit = triangleIntersect(triangles[i], ray);
-        if (triHit.t > 0 && triHit.t < hit.t) hit = triHit;
-    }
+    Hit bvhHit = bvhIntersect(ray);
+    if (bvhHit.t > 0 && bvhHit.t < hit.t) hit = bvhHit;
 
     if(hit.t == 100000) hit.t = -1;
 
@@ -446,8 +545,8 @@ float G1GTR(float a2, float NdotW){
 vec3 cookTorrance(Hit hit, vec3 viewDir, vec3 lightDir, float alpha, bool simplify){
     vec3 h = normalize(lightDir + viewDir);
     float NdotL = max(dot(hit.normal, lightDir), 0);
-    float NdotV = max(dot(viewDir, hit.normal), EPS);
-    float VdotH = max(dot(h, viewDir), 0);
+    float NdotV = max(dot(viewDir, hit.normal), 0);
+    float VdotH = max(dot(h, viewDir), EPS);
     float a2 = alpha * alpha;
     float D = 1; // D is simplified with the PDF
     if (!simplify){
@@ -463,7 +562,7 @@ vec3 cookTorrance(Hit hit, vec3 viewDir, vec3 lightDir, float alpha, bool simpli
 // pdfs
 
 float p_direct(Light light, float distance, float cosLight){
-    return distance * distance / (cosLight * 2 * PI * light.rad * light.rad) * NUM_LIGHT;
+    return distance * distance / (cosLight * 2 * PI * light.rad * light.rad * NUM_LIGHT);
 }
 
 float shadow_hit(Light light, World world, Ray ray){
@@ -528,14 +627,13 @@ void diffuse(World world, inout RaycastData data){
 
     Light light;
 #if NUM_LIGHT > 0
-    light = world.lights[int(rand(seed) * (NUM_LIGHT - 1))];
+    light = world.lights[int(rand(seed) * NUM_LIGHT)];
 #endif
 
     // MIS
-    float wdirect = 3/8.0;
-    float wbsdf = 5/8.0;
+    float wdirect = 0.2;
     wdirect = NUM_LIGHT > 0 ? wdirect : 0;
-    wbsdf = NUM_LIGHT > 0 ? wbsdf : 1;
+    float wbsdf = 1 - wdirect;
     float r = rand(seed);
     float orenNayarRoughness = diffuseRoughness(hit.mat);
     vec3 viewDir = -ray.dir;
@@ -544,7 +642,6 @@ void diffuse(World world, inout RaycastData data){
         // BSDF sampling
         vec3 newDir = randomCosineHemisphere(seed, hit.normal, 1);
         vec3 f_r = oren_nayar(hit, hit.normal, newDir, viewDir, orenNayarRoughness);
-        //f_r = lambert(hit);
         ray.throughput *= f_r * PI / wbsdf;
         ray.dir = newDir;
 
@@ -559,11 +656,8 @@ void diffuse(World world, inout RaycastData data){
             float pbsdf = p_lambert(hit.normal, newDir);
             float weight = wbsdf * pbsdf / (wbsdf * pbsdf + wdirect * pdirect);
 
-            ray.radiance += ray.throughput * Le * weight;
+            ray.radiance += clamp(ray.throughput * weight, 0, 1.3) * Le;
             stop(hit, true);
-        }
-        else{
-            ray.throughput = clamp(ray.throughput, 0, MAX_NONEMIT_BOUNCE);
         }
     } 
     else {
@@ -572,14 +666,13 @@ void diffuse(World world, inout RaycastData data){
         float pdirect = sampleLight(data, light);
         unwrapData(data);
         vec3 f_r = oren_nayar(hit, hit.normal, ray.dir, viewDir, orenNayarRoughness);
-        //f_r = lambert(hit);
         ray.throughput *= f_r;
 
         if (shadow_hit(light, world, ray) > 0){
             float pbsdf = p_lambert(hit.normal, ray.dir);
             float weight = 1.0 / (wdirect * pdirect + wbsdf * pbsdf);
             vec3 Le = light.intensity * light.color;
-            ray.radiance += ray.throughput * Le * weight;
+            ray.radiance += clamp(ray.throughput * weight, 0, 1.3) * Le;
             stop(hit, true);
         }
         else{
@@ -597,7 +690,7 @@ void metal(World world, inout RaycastData data){
     unwrapData(data);
     Light light;
 #if NUM_LIGHT > 0
-    light = world.lights[int(rand(seed) * (NUM_LIGHT - 1))];
+    light = world.lights[int(rand(seed) * NUM_LIGHT)];
 #endif
     ray.origin += hit.t * ray.dir + hit.normal * EPS;
     
@@ -614,19 +707,19 @@ void metal(World world, inout RaycastData data){
     // MIS
     float fuzz = pbrFuzz(hit.mat);
     float alpha = fuzz * fuzz;
-    float wdirect = 3.0/8.0;
-    float wGGX = 5.0/8.0;
+    float wdirect = 0.3 * alpha;
+    float wGGX = 1 - wdirect;
     wdirect = NUM_LIGHT > 0 ? wdirect : 0;
     wGGX = NUM_LIGHT > 0 ? wGGX : 1;
     float r = rand(seed);
     if (r < wGGX){
         vec3 viewDir = -ray.dir;
         vec3 h = randomGGXHemisphere(seed, hit.normal, alpha);
-        vec3 newDir = reflect(-viewDir, h);
+        vec3 newDir = mix(reflect(-viewDir, h), hit.normal, 0);
         
         float pGGX = p_GGX(hit.normal, newDir, viewDir, alpha, true);
         vec3 f_r = cookTorrance(hit, viewDir, newDir, alpha, true);
-        ray.throughput *= f_r /* * NdotL (but is in cookTorrance) */ / max(pGGX * wGGX, EPS);
+        ray.throughput *= f_r /* * NdotL (but is in cookTorrance) */ / (pGGX * wGGX);
         ray.dir = newDir;
 
         Hit nextHit = rayIntersection(world, ray);
@@ -635,13 +728,13 @@ void metal(World world, inout RaycastData data){
             float LdotNl = max(dot(-newDir, nextHit.normal), 0);
             float pdirect = p_direct(light, nextHit.t, LdotNl)
                             * shadow_hit(light, world, ray);
-            float weight = wGGX * pGGX / max(wGGX * pGGX + wdirect * pdirect, EPS);
+            float weight = wGGX * pGGX / (wGGX * pGGX + wdirect * pdirect);
 
-            ray.radiance += ray.throughput * Le * weight;
+            ray.radiance += clamp(ray.throughput * weight, 0, 1.5) * Le;
             stop(hit, true);
         }
         else{
-            ray.throughput = clamp(ray.throughput, 0, MAX_NONEMIT_BOUNCE);
+            //ray.throughput = clamp(ray.throughput, 0, MAX_NONEMIT_BOUNCE);
         }
     }
     else{
@@ -655,9 +748,9 @@ void metal(World world, inout RaycastData data){
 
         if (shadow_hit(light, world, ray) > 0){
             float pGGX = p_GGX(hit.normal, ray.dir, viewDir, alpha, false);
-            float weight = 1.0 / max(wdirect * pdirect + wGGX * pGGX, EPS);
+            float weight = 1.0 / (wdirect * pdirect + wGGX * pGGX);
             vec3 Le = light.color * light.intensity;
-            ray.radiance += ray.throughput * Le * weight;
+            ray.radiance += clamp(ray.throughput * weight, 0, 1.5) * Le;
             stop(hit, true);
         }
         else{
@@ -825,7 +918,7 @@ void main()
     );
     ray = fovRay(pos, ray);
 
-    Mat planeMat = Mat(MAT_DIFF,  vec3(0.36, 0.20, 0.09), mNoData());
+    Mat planeMat = Mat(MAT_PBR,  vec3(0.8), mData(0, 0.3));
     Mat sphereMat = Mat(MAT_DIFF, vec3(1, 0, 0), mData0(ballRoughness));
     Mat glassMat = Mat(MAT_GLASS, vec3(0.75, 0.90, 0.92), mData0(1.33));
 
@@ -849,7 +942,8 @@ void main()
 
 #if NUM_LIGHT > 0
     Light lights[NUM_LIGHT];
-    lights[0] = Light(vec3(0,5,10), 2, vec3(1), 10);
+    lights[0] = Light(vec3(0,3,5), 1.5, vec3(1), 12);
+    //lights[1] = Light(vec3(12,5,10), 1.5, vec3(1), 10);
     World world = World(spheres, planes, lights);
 #else
     World world = World(spheres, planes);
@@ -860,6 +954,6 @@ void main()
         radiance += max(rayColor(world, seed, ray), 0);
     }
 
-    FragColor = radiance + max(frameCount - samples, 0) * texture(screenTex, uv);
-    FragColor /= max(frameCount, samples);
+    FragColor = radiance + max(frameCount, 0) * texture(screenTex, uv);
+    FragColor /= frameCount + samples;
 }

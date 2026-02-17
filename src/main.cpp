@@ -13,7 +13,7 @@
 
 using namespace std;
 
-#define SAMPLES 2
+#define SAMPLES 5
 
 
 ShaderProgram rayTraceShader;
@@ -23,19 +23,24 @@ unsigned int FBO;
 unsigned int texture;
 unsigned int oldTexture;
 unsigned int texWidth, texHeight;
+glm::vec3 modelPos = glm::vec3(2,-1,-1.5);
 float metalColor[3] = {1,1,1};
 float metallic = 0;
 float roughness = 0;
-int resMultiplier = 2;
-int maxBounces = 15;
+int resMultiplier = 3;
+int maxBounces = 6;
 int frameCount = 0;
-int frameAccumulator = SAMPLES;
-int samples = SAMPLES;
+int frameAccumulator = 0;
+int samples = 1;
 int bounces = maxBounces;
 int bsdfType = 3;
 bool showUI = false;
+bool debugBVH = false;
 Camera camera(0.1, 0.3);
 App app;
+
+bool isRendering = false;
+int renderSamples = 2048;
 
 string getShaderSource(const char *filepath){
     ifstream file(filepath);
@@ -51,7 +56,7 @@ string getShaderSource(const char *filepath){
 }
 
 void resetFrame(){
-    frameAccumulator = samples;
+    frameAccumulator = 0;
 }
 
 void genTexture(unsigned int width, unsigned int height){
@@ -69,7 +74,6 @@ void genTexture(unsigned int width, unsigned int height){
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
     glBindTexture(GL_TEXTURE_2D, 0);
 
-    samples = SAMPLES;
     resetFrame();
     texWidth = width;
     texHeight = height;
@@ -117,15 +121,29 @@ void init(){
     glUniform2f(winSizeLoc, app.width(), app.height());
 
     Mesh* mesh = new Mesh();
-    mesh->loadFromModel("models/Cube.obj");
+    mesh->loadFromModel("models/suzanne.obj");
     vector<Triangle> triangles = mesh->getTriangles();
-    GLuint ssbo;
-    glGenBuffers(1, &ssbo);
-    glBindBuffer(GL_SHADER_STORAGE_BUFFER, ssbo);
+    GLuint trissbo;
+    glGenBuffers(1, &trissbo);
+    glBindBuffer(GL_SHADER_STORAGE_BUFFER, trissbo);
     glBufferData(GL_SHADER_STORAGE_BUFFER, triangles.size() * sizeof(Triangle), triangles.data(), GL_STATIC_DRAW);
-    glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 0, ssbo); // binding 0
+    glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 0, trissbo); // binding 0
     glBindBuffer(GL_SHADER_STORAGE_BUFFER, 0);
-    glUniform1i(10, triangles.size());
+    glUniform1i(glGetUniformLocation(rayTraceShader.id(), "numTriangles"), triangles.size());
+    
+    vector<int> triIndices(triangles.size());
+    for (int i = 0; i < triangles.size(); i++) {
+        triIndices[i] = i;
+    }
+    BVHNode* bvh = Mesh::computeBVH(triangles, triIndices, 0, triangles.size());
+    vector<linBVHNode> linNodes = Mesh::lineariseBVH(bvh, triangles);
+    GLuint bvhssbo;
+    glGenBuffers(1, &bvhssbo);
+    glBindBuffer(GL_SHADER_STORAGE_BUFFER, bvhssbo);
+    glBufferData(GL_SHADER_STORAGE_BUFFER, linNodes.size() * sizeof(linBVHNode), linNodes.data(), GL_STATIC_DRAW);
+    glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 1, bvhssbo); // binding 1
+    glBindBuffer(GL_SHADER_STORAGE_BUFFER, 0);
+    glUniform1i(glGetUniformLocation(rayTraceShader.id(), "numBVHNodes"), linNodes.size());
     
     glGenFramebuffers(1, &FBO);
     
@@ -168,6 +186,11 @@ void render(){
     glUniform1f(6, roughness);
     glUniform1i(7, samples);
     glUniform1i(9, bounces);
+
+    int debugBVHPos = glGetUniformLocation(rayTraceShader.id(), "debugBVH");
+    glUniform1i(debugBVHPos, debugBVH ? 1 : 0);
+    int modelPosPos = glGetUniformLocation(rayTraceShader.id(), "modelPos");
+    glUniform3f(modelPosPos, modelPos.x, modelPos.y, modelPos.z);
     int camPosLoc = glGetUniformLocation(rayTraceShader.id(), "camera.pos");
     glUniform3f(camPosLoc, camera.position().x, camera.position().y, camera.position().z);
     int camDirLoc = glGetUniformLocation(rayTraceShader.id(), "camera.lookDir");
@@ -189,7 +212,7 @@ void render(){
 }
 
 void inputs(){
-    if (app.UIInteract()) return;
+    if (app.UIInteract() || isRendering) return;
 
     if (app.keyPressedOnce(GLFW_KEY_K, frameCount))
         cout << "Frame Time: " << glfwGetTime() << "s with " << frameAccumulator << " samples." << endl;
@@ -202,11 +225,7 @@ void inputs(){
 }
 
 void dynamicResolution(){
-    if (app.UIInteract()) samples = 1;
-    else samples = SAMPLES;
-
     if (camera.getIsMoving(frameCount) || app.UIDrag()){
-        samples = 1;
         resetFrame();
         bounces = 4;
         if (texWidth != app.width() / resMultiplier) 
@@ -214,7 +233,6 @@ void dynamicResolution(){
     }
     else if (texWidth != app.width()){
         bounces = maxBounces;
-        samples = SAMPLES;
         resetFrame();
         genTexture(app.width(), app.height());
     }
@@ -228,13 +246,35 @@ void end(){
     app.terminate();
 }
 
-void UI(){
+void BeginTwoColumnLayout()
+{
+    ImGui::BeginTable("##layout", 2, ImGuiTableFlags_SizingStretchProp);
+    ImGui::TableSetupColumn("Label", ImGuiTableColumnFlags_WidthStretch);
+    ImGui::TableSetupColumn("Input", ImGuiTableColumnFlags_WidthFixed, 120);
+}
+
+void EndTwoColumnLayout()
+{
+    ImGui::EndTable();
+}
+
+void Label(const char* label)
+{
+    ImGui::TableNextRow();
+    ImGui::TableSetColumnIndex(0);
+    ImGui::Text("%s", label);
+    ImGui::TableSetColumnIndex(1);
+    ImGui::SetNextItemWidth(-FLT_MIN);
+}
+
+void LeftWindowUI(){
     if (!showUI) return;
 
     ImGui::SetNextWindowPos(ImVec2(0, 0), ImGuiCond_Always);
     ImGui::SetNextWindowSize(ImVec2(300, app.getIo()->DisplaySize.y), ImGuiCond_Always);
-
     ImGui::Begin("Parameters", (bool*)NULL, ImGuiWindowFlags_MenuBar);
+
+    ImGui::BeginDisabled(isRendering);
 
     if (ImGui::BeginMenuBar())
     {
@@ -246,28 +286,101 @@ void UI(){
         ImGui::EndMenuBar();
     }
 
-    if (ImGui::InputInt("Max Bounces", &maxBounces)) resetFrame();
-    ImGui::InputInt("Resolution Divider", &resMultiplier);
-    resMultiplier = glm::max(resMultiplier, 1);
+    ImGui::Spacing();
+    if (ImGui::CollapsingHeader("Technical Settings", ImGuiTreeNodeFlags_DefaultOpen)){
+        BeginTwoColumnLayout();
+        
+        Label("Max Bounces");
+        if (ImGui::InputInt("##Max Bounces", &maxBounces)) resetFrame();
+        
+        Label("Resolution Divider");
+        ImGui::InputInt("##Resolution Divider", &resMultiplier);
+        resMultiplier = glm::max(resMultiplier, 1);
+        
+        EndTwoColumnLayout();
+    }
 
-    const char* items[] = { 
-        "Lambert", 
-        "Qualitative Oren-Nayar (QON)", 
-        "Fujii-Oren-Nayar (FON)", 
-        "Energy-Preserving Oren-Nayar (EON)"
-    };
-    if (ImGui::Combo("Diffuse Model", &bsdfType, items, IM_ARRAYSIZE(items)))
-        resetFrame();
+    ImGui::Spacing();
+    ImGui::Spacing();
+    if (ImGui::CollapsingHeader("Material Settings", ImGuiTreeNodeFlags_DefaultOpen)){
+        BeginTwoColumnLayout();
 
-    if (ImGui::SliderFloat("Ball's Roughness", &roughness, 0, 1))
-        resetFrame();
+        const char* items[] = { 
+            "Lambert", 
+            "(QON) Qualitative Oren-Nayar", 
+            "(FON) Fujii-Oren-Nayar", 
+            "(EON) Energy-Preserving Oren-Nayar"
+        };
+        Label("Diffuse Model");
+        if (ImGui::Combo("##Diffuse Model", &bsdfType, items, IM_ARRAYSIZE(items)))
+            resetFrame();
+
+        Label("Ball's Roughness");
+        if (ImGui::SliderFloat("##Ball's Roughness", &roughness, 0, 1))
+            resetFrame();
+        
+        Label("Metal Color");
+        if (ImGui::ColorEdit3("##Metal Color", metalColor))
+            resetFrame();
     
-    if (ImGui::ColorEdit3("Metal Color", metalColor)) 
-        resetFrame();
+        Label("Metallic");
+        if (ImGui::SliderFloat("##Metallic", &metallic, 0, 1))
+            resetFrame();
 
-    if (ImGui::SliderFloat("Metallic", &metallic, 0, 1)) 
-        resetFrame();
+        EndTwoColumnLayout();
+    }
 
+    ImGui::Spacing();
+    ImGui::Spacing();
+    if (ImGui::CollapsingHeader("Model Settings", ImGuiTreeNodeFlags_DefaultOpen)){
+        BeginTwoColumnLayout();
+
+        Label("Debug BVH");
+        if (ImGui::Checkbox("##Debug BVH", &debugBVH))
+            resetFrame();
+
+        Label("Model Position");
+        if (ImGui::DragFloat3("##Model Position", &modelPos[0]))
+            resetFrame();
+
+        EndTwoColumnLayout();
+    }
+
+    ImGui::Spacing();
+    ImGui::Spacing();
+    if (ImGui::CollapsingHeader("Render Settings", ImGuiTreeNodeFlags_DefaultOpen)){
+        
+        if (ImGui::Button("Render", ImVec2(-FLT_MIN, 0))){
+            isRendering = true;
+            samples = SAMPLES;
+            resetFrame();
+        }
+        
+        BeginTwoColumnLayout();
+        
+        Label("Render Samples");
+        ImGui::InputInt("##Render Samples", &renderSamples);
+        
+        EndTwoColumnLayout();
+        
+        if (isRendering) {
+            ImGui::ProgressBar((float)frameAccumulator / renderSamples, ImVec2(-FLT_MIN, 0));
+
+            string text = to_string(frameAccumulator) + " / " + to_string(renderSamples);
+            float windowWidth = ImGui::GetContentRegionAvail().x;
+            float textWidth   = ImGui::CalcTextSize(text.c_str()).x;
+            ImGui::SetCursorPosX(ImGui::GetCursorPosX() + (windowWidth - textWidth) * 0.5f);
+            ImGui::Text(text.c_str());
+
+            if (frameAccumulator >= renderSamples){
+                app.exportImage();
+                samples = 1;
+                isRendering = false;
+            }
+        }
+    }
+    
+    ImGui::EndDisabled();
     ImGui::End();
 }
 
@@ -281,9 +394,8 @@ int main(){
         render();
         inputs();
         
-        UI();
+        LeftWindowUI();
         
-        samples = SAMPLES;
         frameAccumulator += samples;
         frameCount++;
         dynamicResolution();
