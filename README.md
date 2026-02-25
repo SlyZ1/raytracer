@@ -19,3 +19,14 @@
 ### Other
 ![](outputs/bunny.png)
 ![](outputs/image.png)
+
+## Technical Details
+
+### Libraries used
+- glad
+- glfw
+- glm
+- imgui
+- KHR
+- lodepng
+- tinyobjloader
