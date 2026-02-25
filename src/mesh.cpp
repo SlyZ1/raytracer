@@ -48,8 +48,8 @@ void Mesh::loadFromModel(const char* path){
         const auto &mesh = shape.mesh;
         int numVertex = 3;
         int size = mesh.num_face_vertices.size();
-        size_t index_offset = 0;
-        for (size_t i = 0; i < size; i++)
+        int index_offset = 0;
+        for (int i = 0; i < size; i++)
         {
             int fv = mesh.num_face_vertices[i];
             if (fv == 3){
@@ -133,7 +133,8 @@ BVHNode* Mesh::computeBVH(vector<Triangle>& triangles,
 }
 
 int indexOfTriangle(const vector<Triangle>& triangles, const Triangle& triangle){
-    for(int i = 0; i < triangles.size(); i++){
+    int size = triangles.size();
+    for(int i = 0; i < size; i++){
         Triangle tri = triangles[i];
         if (tri.v1 == triangle.v1 && tri.v2 == triangle.v2 && tri.v3 == triangle.v3){
             return i;

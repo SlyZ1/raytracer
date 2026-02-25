@@ -15,32 +15,61 @@ using namespace std;
 
 #define SAMPLES 5
 
-
 ShaderProgram rayTraceShader;
 ShaderProgram accumulationShader;
+
 unsigned int VBO, VAO, EBO;
 unsigned int FBO;
 unsigned int texture;
 unsigned int oldTexture;
 unsigned int texWidth, texHeight;
-glm::vec3 modelPos = glm::vec3(2,-1,-1.5);
+
+
+// Materials
 float metalColor[3] = {1,1,1};
 float metallic = 0;
 float roughness = 0;
+int bsdfType = 3;
+float refractionIndex = 1.33;
+
+// Technical GPU
+int samples = 1;
 int resMultiplier = 3;
 int maxBounces = 6;
-int frameCount = 0;
-int frameAccumulator = 0;
-int samples = 1;
 int bounces = maxBounces;
-int bsdfType = 3;
+
+// Technical CPU
 bool showUI = false;
+int frameAccumulator = 0;
+int frameCount = 0;
+
+// Model
+glm::vec3 modelPos = glm::vec3(2,-1,-1.5);
 bool debugBVH = false;
+bool useModel = false;
+
+// Rendering
+bool isRenderingImage = false;
+bool isRenderingAnimation = false;
+int renderSamples = 2048;
+
+// Animation
+struct KeyFrame {
+    glm::vec3 modelPos;
+    float keyPos;
+};
+
+int currentKeyFrame = -1;
+int numKeyFrames = 0;
+int animationFPS = 25;
+int animationFrame = 0;
+float animationDuration = 1;
+float animationTime = 0;
+float prevAnimationTime = 0;
+vector<KeyFrame> keyFrames = {};
+
 Camera camera(0.1, 0.3);
 App app;
-
-bool isRendering = false;
-int renderSamples = 2048;
 
 string getShaderSource(const char *filepath){
     ifstream file(filepath);
@@ -57,6 +86,10 @@ string getShaderSource(const char *filepath){
 
 void resetFrame(){
     frameAccumulator = 0;
+}
+
+bool isRendering(){
+    return isRenderingAnimation || isRenderingImage;
 }
 
 void genTexture(unsigned int width, unsigned int height){
@@ -90,7 +123,7 @@ void framebuffer_size_callback(GLFWwindow*, int width, int height)
 }
 
 void init(){
-    app.init(1080, 720, "Basic Raytracer", framebuffer_size_callback);
+    app.init(1600, 900, "Basic Raytracer", framebuffer_size_callback);
     app.toggleCursor(false);
     
     rayTraceShader.create();
@@ -121,7 +154,7 @@ void init(){
     glUniform2f(winSizeLoc, app.width(), app.height());
 
     Mesh* mesh = new Mesh();
-    mesh->loadFromModel("models/suzanne.obj");
+    mesh->loadFromModel("models/sculpture_woman_cut.obj");
     vector<Triangle> triangles = mesh->getTriangles();
     GLuint trissbo;
     glGenBuffers(1, &trissbo);
@@ -132,7 +165,8 @@ void init(){
     glUniform1i(glGetUniformLocation(rayTraceShader.id(), "numTriangles"), triangles.size());
     
     vector<int> triIndices(triangles.size());
-    for (int i = 0; i < triangles.size(); i++) {
+    int size = triangles.size();
+    for (int i = 0; i < size; i++) {
         triIndices[i] = i;
     }
     BVHNode* bvh = Mesh::computeBVH(triangles, triIndices, 0, triangles.size());
@@ -170,6 +204,22 @@ void handleCamera(){
     camera.rotate(app.mouseX(), app.mouseY());
 }
 
+void animation(){
+    if (numKeyFrames <= 1 || prevAnimationTime == animationTime) return;
+
+    KeyFrame prevKf = keyFrames[currentKeyFrame];
+    KeyFrame nextKf = keyFrames[std::min(currentKeyFrame + 1, numKeyFrames - 1)];
+
+    float t = 0;
+    if (prevKf.keyPos != nextKf.keyPos){
+        t = (animationTime - prevKf.keyPos) / (nextKf.keyPos - prevKf.keyPos);
+        t = glm::clamp(t, 0.0f, 1.0f);
+    }
+    modelPos = glm::mix(prevKf.modelPos, nextKf.modelPos, t);
+
+    prevAnimationTime = animationTime;
+}
+
 void render(){
     //Current frame
     glBindFramebuffer(GL_FRAMEBUFFER, FBO);
@@ -186,6 +236,8 @@ void render(){
     glUniform1f(6, roughness);
     glUniform1i(7, samples);
     glUniform1i(9, bounces);
+    glUniform1f(10, refractionIndex);
+    glUniform1i(11, useModel);
 
     int debugBVHPos = glGetUniformLocation(rayTraceShader.id(), "debugBVH");
     glUniform1i(debugBVHPos, debugBVH ? 1 : 0);
@@ -212,7 +264,7 @@ void render(){
 }
 
 void inputs(){
-    if (app.UIInteract() || isRendering) return;
+    if (app.UIInteract() || isRendering()) return;
 
     if (app.keyPressedOnce(GLFW_KEY_K, frameCount))
         cout << "Frame Time: " << glfwGetTime() << "s with " << frameAccumulator << " samples." << endl;
@@ -225,7 +277,7 @@ void inputs(){
 }
 
 void dynamicResolution(){
-    if (camera.getIsMoving(frameCount) || app.UIDrag()){
+    if (camera.getIsMoving(frameCount) || (app.UIInteract() && !isRendering())){
         resetFrame();
         bounces = 4;
         if (texWidth != app.width() / resMultiplier) 
@@ -244,6 +296,46 @@ void end(){
     glDeleteFramebuffers(1, &FBO);
     rayTraceShader.destroy();
     app.terminate();
+}
+
+void updateCurrentKeyFrame(){
+    for(int i = 0; i < numKeyFrames; i++){
+        KeyFrame kf = keyFrames[i];
+        if (animationTime >= kf.keyPos)
+            currentKeyFrame = std::max(currentKeyFrame, i);
+        else
+            currentKeyFrame = std::min(currentKeyFrame, i - 1);
+    }
+}
+
+void renderAnimation(){
+    if (frameAccumulator >= renderSamples){
+        animationFrame++;
+
+        app.exportImage("animation/", to_string(animationFrame) + ".png");
+
+        int numFrames = animationFPS * animationDuration;
+        float step = 1 / (float)numFrames;
+        animationTime += step;
+        updateCurrentKeyFrame();
+
+        resetFrame();
+
+        if (animationFrame >= numFrames) {
+            animationFrame = 0;
+            samples = 1;
+            isRenderingImage = false;
+        }
+    }
+}
+
+void renderImage(){
+    if (frameAccumulator >= renderSamples){
+        app.exportImage();
+        samples = 1;
+        isRenderingImage = false;
+        // C:\ffmpeg\bin\ffmpeg.exe -framerate 20 -i %d.png -c:v libx264 -crf 18 -preset slow -pix_fmt yuv420p output.mp4
+    }
 }
 
 void BeginTwoColumnLayout()
@@ -267,6 +359,17 @@ void Label(const char* label)
     ImGui::SetNextItemWidth(-FLT_MIN);
 }
 
+void DrawMarker(ImVec2 minRect, ImVec2 maxRect, float keyPos){
+    float x = minRect.x + 7 + keyPos * (maxRect.x - minRect.x - 14);
+    ImDrawList* draw_list = ImGui::GetWindowDrawList();
+    draw_list->AddLine(
+        ImVec2(x, minRect.y + 2),
+        ImVec2(x, maxRect.y - 2),
+        IM_COL32(255, 0, 0, 255),
+        2.0f                     
+    );
+}
+
 void LeftWindowUI(){
     if (!showUI) return;
 
@@ -274,17 +377,7 @@ void LeftWindowUI(){
     ImGui::SetNextWindowSize(ImVec2(300, app.getIo()->DisplaySize.y), ImGuiCond_Always);
     ImGui::Begin("Parameters", (bool*)NULL, ImGuiWindowFlags_MenuBar);
 
-    ImGui::BeginDisabled(isRendering);
-
-    if (ImGui::BeginMenuBar())
-    {
-        if (ImGui::BeginMenu("Image"))
-        {
-            if (ImGui::MenuItem("Render", "R")) app.exportImage();
-            ImGui::EndMenu();
-        }
-        ImGui::EndMenuBar();
-    }
+    ImGui::BeginDisabled(isRendering());
 
     ImGui::Spacing();
     if (ImGui::CollapsingHeader("Technical Settings", ImGuiTreeNodeFlags_DefaultOpen)){
@@ -318,13 +411,19 @@ void LeftWindowUI(){
         Label("Ball's Roughness");
         if (ImGui::SliderFloat("##Ball's Roughness", &roughness, 0, 1))
             resetFrame();
-        
+            
+        ImGui::Spacing();
         Label("Metal Color");
         if (ImGui::ColorEdit3("##Metal Color", metalColor))
             resetFrame();
     
         Label("Metallic");
         if (ImGui::SliderFloat("##Metallic", &metallic, 0, 1))
+            resetFrame();
+
+        ImGui::Spacing();
+        Label("Refraction Index");
+        if (ImGui::SliderFloat("##Refraction Index", &refractionIndex, 1, 10))
             resetFrame();
 
         EndTwoColumnLayout();
@@ -334,6 +433,10 @@ void LeftWindowUI(){
     ImGui::Spacing();
     if (ImGui::CollapsingHeader("Model Settings", ImGuiTreeNodeFlags_DefaultOpen)){
         BeginTwoColumnLayout();
+
+        Label("Use Model");
+        if (ImGui::Checkbox("##Use Model", &useModel))
+            resetFrame();
 
         Label("Debug BVH");
         if (ImGui::Checkbox("##Debug BVH", &debugBVH))
@@ -350,9 +453,17 @@ void LeftWindowUI(){
     ImGui::Spacing();
     if (ImGui::CollapsingHeader("Render Settings", ImGuiTreeNodeFlags_DefaultOpen)){
         
-        if (ImGui::Button("Render", ImVec2(-FLT_MIN, 0))){
-            isRendering = true;
-            samples = SAMPLES;
+        if (ImGui::Button("Render Image", ImVec2(-FLT_MIN, 0))){
+            isRenderingImage = true;
+            resetFrame();
+        }
+
+        if (ImGui::Button("Render Animation", ImVec2(-FLT_MIN, 0))){
+            animationFrame = 0;
+            prevAnimationTime = -1;
+            animationTime = 0;
+            updateCurrentKeyFrame();
+            isRenderingAnimation = true;
             resetFrame();
         }
         
@@ -363,7 +474,7 @@ void LeftWindowUI(){
         
         EndTwoColumnLayout();
         
-        if (isRendering) {
+        if (isRendering()) {
             ImGui::ProgressBar((float)frameAccumulator / renderSamples, ImVec2(-FLT_MIN, 0));
 
             string text = to_string(frameAccumulator) + " / " + to_string(renderSamples);
@@ -371,12 +482,71 @@ void LeftWindowUI(){
             float textWidth   = ImGui::CalcTextSize(text.c_str()).x;
             ImGui::SetCursorPosX(ImGui::GetCursorPosX() + (windowWidth - textWidth) * 0.5f);
             ImGui::Text(text.c_str());
+        }
+    }
 
-            if (frameAccumulator >= renderSamples){
-                app.exportImage();
-                samples = 1;
-                isRendering = false;
-            }
+    ImGui::Spacing();
+    ImGui::Spacing();
+    if (ImGui::CollapsingHeader("Animation Settings", ImGuiTreeNodeFlags_DefaultOpen)){
+        
+        BeginTwoColumnLayout();
+
+        Label("Animation Duration");
+        ImGui::InputFloat("##Animation Duration", &animationDuration);
+        
+        Label("FPS");
+        ImGui::InputInt("##FPS", &animationFPS);
+
+        ImGui::Spacing();
+        ImGui::Spacing();
+
+        EndTwoColumnLayout();
+
+        ImGui::BeginTable("##layout", 2, ImGuiTableFlags_SizingStretchSame);
+        ImGui::TableSetupColumn("Label", ImGuiTableColumnFlags_WidthStretch);
+        ImGui::TableSetupColumn("Input", ImGuiTableColumnFlags_WidthStretch);
+        ImGui::TableNextRow();
+
+        ImGui::TableSetColumnIndex(0);
+        ImVec2 size = ImVec2(ImGui::GetContentRegionAvail().x, 0);
+        ImGui::BeginDisabled(currentKeyFrame <= 0);
+        if(ImGui::Button("Previous Key", size)){
+            currentKeyFrame--;
+            KeyFrame keyFrame = keyFrames[currentKeyFrame];
+            animationTime = keyFrame.keyPos;
+        }
+        ImGui::EndDisabled();
+
+        ImGui::TableSetColumnIndex(1);
+        ImGui::BeginDisabled(currentKeyFrame >= numKeyFrames - 1);
+        if(ImGui::Button("Next Key", size)){
+            currentKeyFrame++;
+            KeyFrame keyFrame = keyFrames[currentKeyFrame];
+            animationTime = keyFrame.keyPos;
+        }
+        ImGui::EndDisabled();
+
+        EndTwoColumnLayout();
+
+        if(ImGui::Button("Add Keyframe", ImVec2(-FLT_MIN, 0))){
+            currentKeyFrame++;
+            KeyFrame keyFrame = {
+                modelPos,
+                animationTime
+            };
+            keyFrames.insert(keyFrames.begin() + currentKeyFrame, keyFrame);
+            numKeyFrames++;
+        }
+
+        ImGui::Spacing();
+        ImGui::SetNextItemWidth(-FLT_MIN);
+        if (ImGui::SliderFloat("##Timeline", &animationTime, 0, 1, "")) {
+            updateCurrentKeyFrame();
+        }
+        ImVec2 minRect = ImGui::GetItemRectMin();
+        ImVec2 maxRect = ImGui::GetItemRectMax();
+        for(const auto& kf : keyFrames){
+            DrawMarker(minRect, maxRect, kf.keyPos);
         }
     }
     
@@ -391,10 +561,14 @@ int main(){
         app.startFrame(frameCount);
         handleCamera();
         
+        animation();
         render();
         inputs();
         
         LeftWindowUI();
+
+        if (isRenderingImage) renderImage();
+        if (isRenderingAnimation) renderAnimation();
         
         frameAccumulator += samples;
         frameCount++;

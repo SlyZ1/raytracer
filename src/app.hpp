@@ -16,7 +16,7 @@ class App {
         void startFrame(int frame);
         void endFrame();
         void toggleCursor(bool hide);
-        void exportImage();
+        void exportImage(string additionalPath = "", string name = "image.png");
         bool cursorIsHidden();
         bool shouldClose();
         bool keyPressed(int key);

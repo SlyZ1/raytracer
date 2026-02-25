@@ -75,7 +75,7 @@ void App::toggleCursor(bool show){
     glfwSetInputMode(m_window, GLFW_CURSOR, !show ? GLFW_CURSOR_DISABLED : GLFW_CURSOR_NORMAL);
 }
 
-void App::exportImage(){
+void App::exportImage(string additionalPath, string name){
     glBindFramebuffer(GL_FRAMEBUFFER, 0);
 
     std::vector<unsigned char> pixels(width() * height() * 3);
@@ -104,7 +104,8 @@ void App::exportImage(){
         memcpy(row2, row.data(), stride);
     }
 
-    lodepng::encode("outputs/image.png", pixels, width(), height(), LCT_RGB);
+    string path = "outputs/" + additionalPath + name;
+    lodepng::encode(path.c_str(), pixels, width(), height(), LCT_RGB);
 }
 
 bool App::cursorIsHidden(){

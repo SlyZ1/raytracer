@@ -74,7 +74,7 @@ uniform int numBVHNodes;
 uniform int debugBVH;
 uniform vec3 modelPos;
 
-#define NUM_SPHERE 1
+#define NUM_SPHERE 3
 #define NUM_PLANE 1
 #define NUM_LIGHT 1
 
@@ -102,6 +102,8 @@ layout (location = 6) uniform float ballRoughness;
 layout (location = 7) uniform int samples;
 layout (location = 8) uniform vec2 winSize;
 layout (location = 9) uniform int maxBounces;
+layout (location = 10) uniform float refractionIndex;
+layout (location = 11) uniform bool useModel;
 uniform Camera camera;
 in vec4 vClipPos;
 
@@ -114,7 +116,7 @@ in vec4 vClipPos;
 #define CONSTANT2_FON (2 / 3 - 28 / (15 * PI))
 
 #define MAT_DIFF 0
-#define MAT_PBR 1
+#define MAT_GLOSSY 1
 #define MAT_EMIT 2
 #define MAT_GLASS 3
 #define MAT_METAL 4
@@ -340,7 +342,7 @@ Hit triangleIntersect(Triangle tri, Ray ray){
     vec3 normal = computeNormal(tri);
     bool isInside = dot(normal, ray.dir) > 0;
 
-    return Hit(t, normal, Mat(MAT_PBR, vec3(0.7,0.9,1), mData(0.4,1)), isInside);
+    return Hit(t, normal, Mat(MAT_GLOSSY, metalProperties.xyz, mData(ballRoughness,metalProperties.w)), isInside);
 }
 
 Hit intersectAABB(Ray ray, AABB box, float tMin, float tMax)
@@ -381,7 +383,7 @@ Hit intersectAABB(Ray ray, AABB box, float tMin, float tMax)
 
 Hit bvhIntersect(inout Ray ray)
 {
-    ray.origin -= modelPos;
+    //ray.origin -= modelPos;
     const int STACK_SIZE = 32;
 
     int stack[STACK_SIZE];
@@ -422,7 +424,7 @@ Hit bvhIntersect(inout Ray ray)
         }
     }
 
-    ray.origin += modelPos;
+    //ray.origin += modelPos;
     return hit;
 }
 
@@ -445,8 +447,10 @@ Hit rayIntersection(World world, inout Ray ray){
         if (lightHit.t > 0 && lightHit.t < hit.t) hit = lightHit;
     }
 #endif
-    Hit bvhHit = bvhIntersect(ray);
-    if (bvhHit.t > 0 && bvhHit.t < hit.t) hit = bvhHit;
+    if (useModel){
+        Hit bvhHit = bvhIntersect(ray);
+        if (bvhHit.t > 0 && bvhHit.t < hit.t) hit = bvhHit;
+    }
 
     if(hit.t == 100000) hit.t = -1;
 
@@ -572,7 +576,7 @@ float shadow_hit(Light light, World world, Ray ray){
     return 1;
 }
 
-float p_lambert(vec3 normal, vec3 w){
+float p_cosineHemisphere(vec3 normal, vec3 w){
     return max(0, dot(normal, w)) / PI;
 }
 
@@ -653,7 +657,7 @@ void diffuse(World world, inout RaycastData data){
 
             float pdirect = p_direct(light, nextHit.t, LdotNl)
                             * shadow_hit(light, world, ray);
-            float pbsdf = p_lambert(hit.normal, newDir);
+            float pbsdf = p_cosineHemisphere(hit.normal, newDir);
             float weight = wbsdf * pbsdf / (wbsdf * pbsdf + wdirect * pdirect);
 
             ray.radiance += clamp(ray.throughput * weight, 0, 1.3) * Le;
@@ -669,7 +673,7 @@ void diffuse(World world, inout RaycastData data){
         ray.throughput *= f_r;
 
         if (shadow_hit(light, world, ray) > 0){
-            float pbsdf = p_lambert(hit.normal, ray.dir);
+            float pbsdf = p_cosineHemisphere(hit.normal, ray.dir);
             float weight = 1.0 / (wdirect * pdirect + wbsdf * pbsdf);
             vec3 Le = light.intensity * light.color;
             ray.radiance += clamp(ray.throughput * weight, 0, 1.3) * Le;
@@ -733,9 +737,6 @@ void metal(World world, inout RaycastData data){
             ray.radiance += clamp(ray.throughput * weight, 0, 1.5) * Le;
             stop(hit, true);
         }
-        else{
-            //ray.throughput = clamp(ray.throughput, 0, MAX_NONEMIT_BOUNCE);
-        }
     }
     else{
         // Direct lighting
@@ -795,7 +796,7 @@ void glass(inout RaycastData data){
     updateData(data);
 }
 
-void pbr(World world, inout RaycastData data){
+void glossy(World world, inout RaycastData data){
     Ray ray; Hit hit; uint seed;
     unwrapData(data);
 
@@ -825,8 +826,8 @@ void computeLighting(World world, in out Hit hit, in out Ray ray, in out uint se
         case MAT_DIFF:
             diffuse(world, data);
             break;
-        case MAT_PBR:
-            pbr(world, data);
+        case MAT_GLOSSY:
+            glossy(world, data);
             break;
         case MAT_METAL:
             metal(world, data);
@@ -883,7 +884,7 @@ vec3 horizon(vec3 lookingAt){
 }
 
 vec3 sky(vec3 lookingAt){
-    return /*sun(lookingAt) + */horizon(lookingAt);
+    return horizon(lookingAt);
 }
 
 vec4 rayColor(World world, in out uint seed, Ray ray){
@@ -908,6 +909,7 @@ void main()
     float resolutionFactor = winSize.x / texSize.x;
     uint seed = initSeed(uvec2(gl_FragCoord.xy * resolutionFactor), frameCount);
     vec2 pos = ratio(vClipPos.xy) * resolutionFactor + ratio(vec2(1)) * (resolutionFactor - 1);
+    vec2 offset = resolutionFactor * vec2(rand(seed), rand(seed)) / winSize;
     vec2 uv = (vClipPos.xy + vec2(1)) * 0.5;
 
     Ray ray = Ray(
@@ -918,32 +920,36 @@ void main()
     );
     ray = fovRay(pos, ray);
 
-    Mat planeMat = Mat(MAT_PBR,  vec3(0.8), mData(0, 0.3));
+    Mat planeMat = Mat(MAT_GLOSSY, vec3(0.85), mData(0,0.4));
     Mat sphereMat = Mat(MAT_DIFF, vec3(1, 0, 0), mData0(ballRoughness));
-    Mat glassMat = Mat(MAT_GLASS, vec3(0.75, 0.90, 0.92), mData0(1.33));
+    Mat glassMat = Mat(MAT_GLASS, vec3(1, 0.85, 0.85), mData0(refractionIndex));
 
     float metallic = metalProperties.w;
     vec3 metalColor = metalProperties.rgb;
-    Mat metalMat1 = Mat(MAT_PBR, metalColor, mData(0 / 8.0, metallic));
-    Mat metalMat2 = Mat(MAT_PBR, metalColor, mData(2 / 8.0, metallic));
-    Mat metalMat3 = Mat(MAT_PBR, metalColor, mData(4 / 8.0, metallic));
-    Mat metalMat4 = Mat(MAT_PBR, metalColor, mData(6 / 8.0, metallic));
+    Mat metalMat1 = Mat(MAT_GLOSSY, metalColor, mData(0 / 8.0, metallic));
+    Mat metalMat2 = Mat(MAT_GLOSSY, metalColor, mData(2 / 8.0, metallic));
+    Mat metalMat3 = Mat(MAT_GLOSSY, metalColor, mData(4 / 8.0, metallic));
+    Mat metalMat4 = Mat(MAT_GLOSSY, metalColor, mData(6 / 8.0, metallic));
+
+    Mat sphereMat1 = Mat(MAT_GLASS, metalColor, mData0(1.05));
+    Mat sphereMat2 = Mat(MAT_GLASS, metalColor, mData0(1.5));
+    Mat sphereMat3 = Mat(MAT_GLASS, metalColor, mData0(4));
 
     Sphere spheres[NUM_SPHERE];
-    spheres[0] = Sphere(vec3(0,EPS,-5), 2, sphereMat);
-    /*spheres[1] = Sphere(vec3(0,EPS-0.5,9), 1, glassMat);
-    spheres[2] = Sphere(vec3(4, EPS, -5), 2, metalMat2);
+    spheres[0] = Sphere(vec3(3,-3,-4), 1, sphereMat1);
+    /*spheres[1] = Sphere(vec3(0,1,-4), 1, sphereMat2);
+    spheres[2] = Sphere(vec3(-3,1, -4), 1, sphereMat3);
     spheres[3] = Sphere(vec3(10, EPS, -5), 2, metalMat3);
     spheres[4] = Sphere(vec3(16, EPS, -5), 2, metalMat4);
     spheres[5] = Sphere(vec3(-6, EPS, -5), 2, glassMat);*/
     
     Plane planes[NUM_PLANE];
-    planes[0] = Plane(vec3(0,-2,-3), vec3(0,1,0), planeMat);
+    planes[0] = Plane(vec3(0,0,-5), vec3(0,1,0), planeMat);
 
 #if NUM_LIGHT > 0
     Light lights[NUM_LIGHT];
-    lights[0] = Light(vec3(0,3,5), 1.5, vec3(1), 12);
-    //lights[1] = Light(vec3(12,5,10), 1.5, vec3(1), 10);
+    lights[0] = Light(modelPos, 1.5, vec3(1), 10);
+    //lights[1] = Light(vec3(6,5,10), 1.5, vec3(1), 10);
     World world = World(spheres, planes, lights);
 #else
     World world = World(spheres, planes);
